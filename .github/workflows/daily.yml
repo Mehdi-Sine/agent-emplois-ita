@@ -1,0 +1,42 @@
+name: ita-jobs-daily
+
+on:
+  schedule:
+    - cron: '1 22 * * *'
+    - cron: '1 23 * * *'
+    - cron: '1 10 * * *'
+    - cron: '1 11 * * *'
+  workflow_dispatch:
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run collector
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          JOBS_ARCHIVE_MISSED_THRESHOLD: '2'
+          USER_AGENT: 'ITA Jobs Bot/1.0 (+GitHub Actions)'
+        run: python -m app.main_collect_daily
+
+      - name: Upload run artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ita-jobs-runs
+          path: agent/data/runs

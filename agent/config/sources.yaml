@@ -1,0 +1,152 @@
+sources:
+  - slug: arvalis
+    name: ARVALIS
+    site_url: https://www.arvalis.fr
+    jobs_url: https://www.arvalis.fr/l-institut/nous-rejoindre/offres-d-emploi-de-stages
+    enabled: true
+    mode: http
+    timeout_seconds: 20
+
+  - slug: ctifl
+    name: CTIFL
+    site_url: https://www.ctifl.fr
+    jobs_url: https://www.ctifl.fr/recrutement
+    enabled: true
+    mode: http
+    timeout_seconds: 20
+
+  - slug: idele
+    name: Institut de l'Élevage
+    site_url: https://idele.fr
+    jobs_url: https://idele.fr/recrutement
+    enabled: true
+    mode: http
+    timeout_seconds: 20
+
+  - slug: ifip
+    name: IFIP
+    site_url: https://ifip.asso.fr
+    jobs_url: https://ifip.asso.fr/institut/recrutement/
+    enabled: true
+    mode: http
+    timeout_seconds: 20
+
+  - slug: iteipmai
+    name: ITEIPMAI
+    site_url: https://www.iteipmai.fr
+    jobs_url: https://www.iteipmai.fr/emplois-stages/
+    enabled: true
+    mode: http
+    timeout_seconds: 20
+
+  - slug: itavi
+    name: ITAVI
+    site_url: https://www.itavi.asso.fr
+    jobs_url: https://www.itavi.asso.fr/page/nous-rejoindre
+    enabled: true
+    mode: http
+    timeout_seconds: 20
+
+  - slug: terres_inovia
+    name: Terres Inovia
+    site_url: https://www.terresinovia.fr
+    jobs_url: https://www.terresinovia.fr/fr/institut/carrieres
+    enabled: true
+    mode: http
+    timeout_seconds: 20
+
+  - slug: armeflhor
+    name: ARMEFLHOR
+    site_url: https://www.armeflhor.fr
+    jobs_url: https://www.armeflhor.fr/category/recrutement/
+    enabled: false
+    mode: http
+    timeout_seconds: 20
+
+  - slug: astredhor
+    name: ASTREDHOR
+    site_url: https://institut-du-vegetal.fr
+    jobs_url: https://institut-du-vegetal.fr/nous-rejoindre/
+    enabled: false
+    mode: http
+    timeout_seconds: 20
+
+  - slug: ceva
+    name: CEVA
+    site_url: https://www.ceva-algues.com
+    jobs_url: https://www.ceva-algues.com/le-ceva/recrutement/
+    enabled: false
+    mode: http
+    timeout_seconds: 20
+
+  - slug: cnpf
+    name: CNPF
+    site_url: https://www.cnpf.fr
+    jobs_url: https://www.cnpf.fr/le-cnpf-recrute
+    enabled: false
+    mode: http
+    timeout_seconds: 20
+
+  - slug: inov3pt
+    name: inov3PT
+    site_url: https://www.inov3pt.fr
+    jobs_url: https://www.inov3pt.fr/recrutements
+    enabled: false
+    mode: http
+    timeout_seconds: 20
+
+  - slug: ifce
+    name: IFCE
+    site_url: https://www.ifce.fr
+    jobs_url: https://www.ifce.fr/ifce/formations-et-metiers-ifce/equi-ressources/
+    enabled: false
+    mode: http
+    timeout_seconds: 20
+
+  - slug: ifpc
+    name: IFPC
+    site_url: https://www.ifpc.eu
+    jobs_url: https://www.ifpc.eu
+    enabled: false
+    mode: http
+    timeout_seconds: 20
+
+  - slug: ifv
+    name: IFV
+    site_url: https://www.vignevin.com
+    jobs_url: https://www.vignevin-occitanie.com/qui-sommes-nous/offres-de-stage-et-demploi/
+    enabled: false
+    mode: http
+    timeout_seconds: 20
+
+  - slug: it2
+    name: IT2
+    site_url: https://it2.fr
+    jobs_url: https://it2.fr
+    enabled: false
+    mode: http
+    timeout_seconds: 20
+
+  - slug: itab
+    name: ITAB
+    site_url: https://itab.bio
+    jobs_url: https://itab.bio/rejoignez-nous
+    enabled: false
+    mode: http
+    timeout_seconds: 20
+
+  - slug: itb
+    name: ITB
+    site_url: https://www.itbfr.org
+    jobs_url: https://www.itbfr.org/nous-connaitre/recrutement
+    enabled: false
+    mode: http
+    timeout_seconds: 20
+
+  - slug: itsap
+    name: ITSAP
+    site_url: https://itsap.asso.fr
+    jobs_url: https://itsap.asso.fr/institut
+    enabled: false
+    mode: http
+    timeout_seconds: 20

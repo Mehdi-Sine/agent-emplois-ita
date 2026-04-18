@@ -1,0 +1,56 @@
+name: ita-jobs-manual
+
+on:
+  workflow_dispatch:
+    inputs:
+      sources:
+        description: 'Liste de slugs séparés par des virgules, ex: arvalis,idele'
+        required: false
+        default: ''
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run manual collection
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          JOBS_ARCHIVE_MISSED_THRESHOLD: '2'
+          USER_AGENT: 'ITA Jobs Bot/1.0 (+GitHub Actions)'
+          SOURCES: ${{ github.event.inputs.sources }}
+        run: |
+          if [ -z "$SOURCES" ]; then
+            python -m app.main_collect_daily --skip-paris-guard
+          else
+            ARGS=""
+            IFS=',' read -ra ITEMS <<< "$SOURCES"
+            for item in "${ITEMS[@]}"; do
+              trimmed=$(echo "$item" | xargs)
+              if [ -n "$trimmed" ]; then
+                ARGS="$ARGS --source $trimmed"
+              fi
+            done
+            python -m app.main_collect_daily --skip-paris-guard $ARGS
+          fi
+
+      - name: Upload run artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ita-jobs-manual-runs
+          path: agent/data/runs
