@@ -3,6 +3,33 @@ import type { Offer, PipelineRun, SourceStatus } from "@/types";
 
 const DEFAULT_LIMIT = 100;
 
+type OfferByIdRow = {
+  id: string;
+  title: string;
+  organization: string | null;
+  location_text: string | null;
+  contract_type: string | null;
+  offer_type: string | null;
+  remote_mode: string | null;
+  posted_at: string | null;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  archived_at: string | null;
+  source_url: string | null;
+  application_url: string | null;
+  description_text: string | null;
+  sources:
+    | {
+        slug: string;
+        name: string;
+      }
+    | {
+        slug: string;
+        name: string;
+      }[]
+    | null;
+};
+
 export async function getActiveOffers(searchParams: {
   q?: string;
   source?: string;
@@ -45,6 +72,7 @@ export async function getArchivedOffers(): Promise<Offer[]> {
     .select("*")
     .order("archived_at", { ascending: false })
     .limit(DEFAULT_LIMIT);
+
   if (error) {
     throw error;
   }
@@ -53,9 +81,10 @@ export async function getArchivedOffers(): Promise<Offer[]> {
 
 export async function getOfferById(id: string): Promise<Offer | null> {
   const db = getDb();
-  const { data, error } = await db
+  const { data: rawData, error } = await db
     .from("offers")
-    .select(`
+    .select(
+      `
       id,
       title,
       organization,
@@ -74,14 +103,24 @@ export async function getOfferById(id: string): Promise<Offer | null> {
         slug,
         name
       )
-    `)
+    `
+    )
     .eq("id", id)
     .limit(1)
-    .single();
+    .maybeSingle();
 
   if (error) {
     return null;
   }
+
+  const data = (rawData ?? null) as OfferByIdRow | null;
+
+  if (!data) {
+    return null;
+  }
+
+  const source =
+    Array.isArray(data.sources) ? data.sources[0] ?? null : data.sources;
 
   return {
     id: data.id,
@@ -98,9 +137,9 @@ export async function getOfferById(id: string): Promise<Offer | null> {
     source_url: data.source_url,
     application_url: data.application_url,
     description_text: data.description_text,
-    source_slug: data.sources.slug,
-    source_name: data.sources.name
-  };
+    source_slug: source?.slug ?? "",
+    source_name: source?.name ?? "",
+  } as Offer;
 }
 
 export async function getLatestSourceStatuses(): Promise<SourceStatus[]> {
@@ -141,5 +180,6 @@ export async function getSourceSlugs(): Promise<Array<{ slug: string; name: stri
   if (error) {
     throw error;
   }
-  return data ?? [];
+
+  return (data ?? []) as Array<{ slug: string; name: string }>;
 }
