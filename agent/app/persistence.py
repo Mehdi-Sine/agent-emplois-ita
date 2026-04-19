@@ -20,6 +20,27 @@ def json_safe(value: Any) -> Any:
     return value
 
 
+def is_offer_listed_inactive(raw_payload: dict[str, Any] | None) -> bool:
+    if not raw_payload:
+        return False
+
+    if bool(raw_payload.get("is_filled")):
+        return True
+
+    listing_status = str(raw_payload.get("listing_status") or "").strip().lower()
+    inactive_statuses = {
+        "filled",
+        "closed",
+        "archived",
+        "inactive",
+        "pourvue",
+        "pourvues",
+        "pourvu",
+        "closed_filled",
+    }
+    return listing_status in inactive_statuses
+
+
 class SupabaseRepository:
     def __init__(self, url: str, key: str) -> None:
         self.client: Client = create_client(url, key)
@@ -155,6 +176,7 @@ class SupabaseRepository:
 
         for offer in offers:
             current_keys.add(offer.source_offer_key)
+
             existing = (
                 self.client.table("offers")
                 .select("id,content_hash,is_active")
@@ -164,7 +186,11 @@ class SupabaseRepository:
                 .execute()
             )
             existing_row = existing.data[0] if existing.data else None
+
             now_iso = datetime.now(timezone.utc).isoformat()
+            raw_payload = json_safe(offer.raw_payload or {})
+            listed_inactive = is_offer_listed_inactive(raw_payload)
+
             payload = {
                 "source_id": source_id,
                 "last_source_run_id": source_run_id,
@@ -183,11 +209,11 @@ class SupabaseRepository:
                 "posted_at": offer.posted_at.isoformat() if offer.posted_at else None,
                 "description_text": offer.description_text,
                 "content_hash": offer.content_hash,
-                "is_active": True,
+                "is_active": not listed_inactive,
                 "last_seen_at": now_iso,
-                "archived_at": None,
+                "archived_at": now_iso if listed_inactive else None,
                 "consecutive_missed_runs": 0,
-                "raw_payload": json_safe(offer.raw_payload),
+                "raw_payload": raw_payload,
             }
 
             if existing_row is None:
@@ -197,7 +223,10 @@ class SupabaseRepository:
                 result.offers_new += 1
             else:
                 offer_id = existing_row["id"]
-                if existing_row["content_hash"] != offer.content_hash or existing_row["is_active"] is False:
+                if (
+                    existing_row["content_hash"] != offer.content_hash
+                    or bool(existing_row["is_active"]) != (not listed_inactive)
+                ):
                     self.client.table("offers").update(json_safe(payload)).eq("id", offer_id).execute()
                     result.offers_updated += 1
                 else:
@@ -206,8 +235,8 @@ class SupabaseRepository:
                             "last_seen_at": now_iso,
                             "last_source_run_id": source_run_id,
                             "consecutive_missed_runs": 0,
-                            "is_active": True,
-                            "archived_at": None,
+                            "is_active": not listed_inactive,
+                            "archived_at": now_iso if listed_inactive else None,
                         }
                     ).eq("id", offer_id).execute()
                     result.offers_unchanged += 1
@@ -224,13 +253,14 @@ class SupabaseRepository:
                         "contract_type": offer.contract_type,
                         "offer_type": offer.offer_type,
                         "posted_at": offer.posted_at.isoformat() if offer.posted_at else None,
-                        "raw_payload": offer.raw_payload,
+                        "raw_payload": raw_payload,
                     }
                 )
             ).execute()
 
         missing_rows = [row for row in active_rows if row["source_offer_key"] not in current_keys]
         now_iso = datetime.now(timezone.utc).isoformat()
+
         for row in missing_rows:
             new_missed_count = int(row.get("consecutive_missed_runs") or 0) + 1
             is_archive = new_missed_count >= archive_missed_threshold
@@ -244,4 +274,5 @@ class SupabaseRepository:
             ).eq("id", row["id"]).execute()
             if is_archive:
                 result.offers_archived += 1
+
         return result
