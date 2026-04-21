@@ -27,7 +27,8 @@ class ActaConnector(BaseConnector):
         r"avant le (?P<day>\d{1,2})/(?P<month>\d{1,2})/(?P<year>\d{4})",
         re.IGNORECASE,
     )
-    DURATION_RE = re.compile(r"^\(?\d+\s+mois\)?$", re.IGNORECASE)
+    WTTJ_RELATIVE_RE = re.compile(r"^(il y a\s+\d+\s+jours|le mois dernier|il y a\s+\d+\s+heures?)$", re.IGNORECASE)
+    ADDRESS_CITY_RE = re.compile(r"\b\d{5}\s+([A-Za-zÀ-ÿ'\- ]+)")
 
     NOISE_LINES = {
         "postuler",
@@ -38,19 +39,53 @@ class ActaConnector(BaseConnector):
         "retour",
         "questions et réponses sur l'offre",
         "le poste",
+        "descriptif du poste",
+        "envie d’en savoir plus ?",
+        "envie d'en savoir plus ?",
     }
+
+    def __init__(self, source) -> None:
+        super().__init__(source)
+        self._listing_by_url: dict[str, dict[str, object]] = {}
 
     def discover_offer_urls(self, client: Client) -> list[str]:
         response = client.get(str(self.source.jobs_url))
         response.raise_for_status()
         tree = html_tree(response.text)
 
+        self._listing_by_url = {}
         urls: list[str] = []
         seen: set[str] = set()
 
+        for card in tree.css("[data-role='jobs:thumb']"):
+            link = card.css_first("a[href*='/fr/companies/acta/jobs/']")
+            if not link:
+                continue
+
+            href = link.attributes.get("href")
+            url = self._canonicalize_offer_url(absolute_url(str(response.url), href))
+            title = normalize_spaces(link.text(separator=" ", strip=True))
+            if not url or not title:
+                continue
+
+            blob = f"{url} {title}".lower()
+            if "spontan" in blob:
+                continue
+            if url in seen:
+                continue
+
+            meta = self._extract_card_meta(card, title, url)
+            self._listing_by_url[url] = meta
+            seen.add(url)
+            urls.append(url)
+
+        if urls:
+            return urls
+
+        # fallback minimal si WTTJ ne rend pas les cartes avec le même markup
         for node in tree.css("a[href*='/fr/companies/acta/jobs/']"):
             href = node.attributes.get("href")
-            text = normalize_spaces(node.text(separator=" ", strip=True) if node else "")
+            text = normalize_spaces(node.text(separator=" ", strip=True))
             url = self._canonicalize_offer_url(absolute_url(str(response.url), href))
             if not url:
                 continue
@@ -60,26 +95,47 @@ class ActaConnector(BaseConnector):
             if url in seen:
                 continue
             seen.add(url)
+            self._listing_by_url[url] = {
+                "title": text or None,
+                "contract_type": None,
+                "location_text": self._fallback_location_from_url(url),
+                "city": self._fallback_location_from_url(url),
+                "remote_mode": None,
+            }
             urls.append(url)
 
         return urls
 
     def parse_offer(self, client: Client, url: str) -> dict[str, object] | None:
+        if not self._listing_by_url:
+            self.discover_offer_urls(client)
+        listing = self._listing_by_url.get(url, {})
+
         response = client.get(url)
         response.raise_for_status()
         tree = html_tree(response.text)
 
-        title = self._node_text(tree, ["h1", "h2"])
+        title = self._node_text(tree, ["h1", "h2"]) or self._as_clean_str(listing.get("title"))
         if not title:
             return None
 
         lines = self._extract_lines(tree)
         header_lines = self._extract_header_lines(lines, title)
 
-        contract_type = self._extract_contract_type(header_lines) or self._infer_contract_type(title)
-        location_text = self._extract_location(header_lines, url)
+        contract_type = (
+            self._as_clean_str(listing.get("contract_type"))
+            or self._extract_contract_type(header_lines)
+            or self._infer_contract_type(title)
+        )
+
+        location_text = (
+            self._as_clean_str(listing.get("location_text"))
+            or self._extract_detail_location(lines)
+            or self._fallback_location_from_url(url)
+        )
         city = self._extract_city(location_text)
-        remote_mode = self._extract_remote_mode(header_lines)
+
+        remote_mode = self._as_clean_str(listing.get("remote_mode")) or self._extract_remote_mode(header_lines)
         posted_at = self._extract_posted_at(response.text)
         description_text = self._extract_description(lines, title)
         application_url = self._extract_application_url(tree, str(response.url)) or url
@@ -106,6 +162,7 @@ class ActaConnector(BaseConnector):
             "raw_deadline": deadline.isoformat() if deadline else None,
             "is_filled": is_filled,
             "listing_status": listing_status,
+            "listing_meta": listing,
         }
 
     def normalize_offer(self, raw_item: dict[str, object]) -> NormalizedOffer:
@@ -152,6 +209,55 @@ class ActaConnector(BaseConnector):
         clean = urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
         return clean if self.JOB_URL_RE.match(clean) else None
 
+    def _extract_card_meta(self, card, title: str, url: str) -> dict[str, object]:
+        text = card.text(separator="\n", strip=True)
+        lines: list[str] = []
+        seen: set[str] = set()
+        for raw_line in text.splitlines():
+            line = normalize_spaces(raw_line)
+            if not line or line == title:
+                continue
+            low = line.lower()
+            if low in self.NOISE_LINES:
+                continue
+            if low in seen:
+                continue
+            seen.add(low)
+            lines.append(line)
+
+        contract_type = None
+        location_text = None
+        remote_mode = None
+
+        for idx, line in enumerate(lines):
+            contract = self._infer_contract_type(line)
+            if contract and not contract_type:
+                contract_type = contract
+                for candidate in lines[idx + 1 : idx + 5]:
+                    low = candidate.lower()
+                    if self._is_location_candidate(candidate):
+                        location_text = candidate
+                        break
+                    if "télétravail" in low or "teletravail" in low:
+                        break
+
+            low = line.lower()
+            if ("télétravail" in low or "teletravail" in low) and remote_mode is None:
+                remote_mode = line
+            if location_text is None and self._is_location_candidate(line):
+                location_text = line
+
+        if location_text is None:
+            location_text = self._fallback_location_from_url(url)
+
+        return {
+            "title": title,
+            "contract_type": contract_type,
+            "location_text": location_text,
+            "city": self._extract_city(location_text),
+            "remote_mode": remote_mode,
+        }
+
     def _extract_lines(self, tree) -> list[str]:
         body = tree.body
         text = body.text(separator="\n", strip=True) if body else tree.text(separator="\n", strip=True)
@@ -172,7 +278,7 @@ class ActaConnector(BaseConnector):
                 break
 
         header: list[str] = []
-        for line in lines[start_index : start_index + 12]:
+        for line in lines[start_index : start_index + 14]:
             lower = line.lower()
             if lower in self.NOISE_LINES:
                 continue
@@ -188,29 +294,33 @@ class ActaConnector(BaseConnector):
                 return contract
         return None
 
-    def _extract_location(self, header_lines: list[str], url: str) -> str | None:
-        for line in header_lines:
+    def _extract_detail_location(self, lines: list[str]) -> str | None:
+        for idx, line in enumerate(lines):
+            if line.lower() == "le lieu de travail":
+                for candidate in lines[idx + 1 : idx + 5]:
+                    low = candidate.lower()
+                    if low in self.NOISE_LINES:
+                        continue
+                    if self._infer_contract_type(candidate):
+                        continue
+                    return candidate
+        for line in lines:
             low = line.lower()
-            if self._infer_contract_type(line):
-                continue
-            if self.DURATION_RE.match(line):
-                continue
-            if any(token in low for token in [
-                "télétravail",
-                "teletravail",
-                "salaire",
-                "expérience",
-                "experience",
-                "éducation",
-                "education",
-            ]):
-                continue
-            if low.startswith("il y a "):
-                continue
-            # ville simple sur WTTJ: Paris / Lyon
-            if re.match(r"^[A-Za-zÀ-ÿ' -]+$", line):
-                return line
+            if low.startswith("localisation"):
+                return line.split(":", 1)[-1].strip() or None
+        return None
 
+    def _extract_city(self, location_text: str | None) -> str | None:
+        if not location_text:
+            return None
+        match = self.ADDRESS_CITY_RE.search(location_text)
+        if match:
+            city = normalize_spaces(match.group(1).strip(" ,"))
+            return city or None
+        city = normalize_spaces(location_text.split(",")[0].strip())
+        return city or None
+
+    def _fallback_location_from_url(self, url: str) -> str | None:
         parsed = urlsplit(url)
         slug = parsed.path.rstrip("/").rsplit("_", 1)[-1].strip().lower()
         if slug == "paris":
@@ -219,11 +329,25 @@ class ActaConnector(BaseConnector):
             return "Lyon"
         return None
 
-    def _extract_city(self, location_text: str | None) -> str | None:
-        if not location_text:
-            return None
-        city = normalize_spaces(location_text.split(",")[0].strip())
-        return city or None
+    def _is_location_candidate(self, line: str) -> bool:
+        low = line.lower()
+        if not line:
+            return False
+        if self._infer_contract_type(line):
+            return False
+        if self.WTTJ_RELATIVE_RE.match(low):
+            return False
+        if "télétravail" in low or "teletravail" in low:
+            return False
+        if low.startswith("salaire") or low.startswith("expérience") or low.startswith("experience"):
+            return False
+        if low.startswith("éducation") or low.startswith("education"):
+            return False
+        if re.search(r"\d+\s+mois", low):
+            return False
+        if low.startswith("début") or low.startswith("debut"):
+            return False
+        return bool(re.match(r"^[A-Za-zÀ-ÿ0-9,'\- ]+$", line))
 
     def _extract_remote_mode(self, header_lines: list[str]) -> str | None:
         for line in header_lines:
@@ -259,6 +383,8 @@ class ActaConnector(BaseConnector):
                 "envie d'en savoir plus ?",
                 "le lieu de travail",
                 "l'entreprise",
+                "profil recherché",
+                "l’entreprise",
             }:
                 break
             if lower in self.NOISE_LINES:
@@ -292,7 +418,7 @@ class ActaConnector(BaseConnector):
             return "stage"
         if "cdi" in low:
             return "cdi"
-        if "cdd" in low:
+        if "cdd" in low or "temporaire" in low:
             return "cdd"
         return None
 
@@ -341,3 +467,9 @@ class ActaConnector(BaseConnector):
                 if text:
                     return text
         return None
+
+    def _as_clean_str(self, value: object) -> str | None:
+        if value is None:
+            return None
+        text = normalize_spaces(str(value))
+        return text or None

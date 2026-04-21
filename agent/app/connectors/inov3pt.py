@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import html
 import re
-from datetime import datetime
+import unicodedata
 from urllib.parse import quote
 
 from httpx import Client
@@ -12,15 +13,21 @@ from app.models import NormalizedOffer
 
 
 class Inov3ptConnector(BaseConnector):
+    TITLE_PREFIX_RE = re.compile(r"^poste\s+d[eu]'|^poste\s+de\s+|^poste\s+d’", re.IGNORECASE)
+    DATE_RANGE_RE = re.compile(r"^[A-Za-zÀ-ÿ]+(?:-[A-Za-zÀ-ÿ]+)?\s+[0-9]{4}$")
+    FOOTER_RE = re.compile(r"^institut technique agricole qualifi", re.IGNORECASE)
+
     def __init__(self, source) -> None:
         super().__init__(source)
         self._items_by_url: dict[str, dict[str, object]] = {}
+        self._normalized_html: str = ""
 
     def discover_offer_urls(self, client: Client) -> list[str]:
         response = client.get(str(self.source.jobs_url))
         response.raise_for_status()
         tree = html_tree(response.text)
         lines = self._extract_lines(tree)
+        self._normalized_html = self._normalize_for_search(html.unescape(response.text))
 
         items = self._extract_items(lines)
         self._items_by_url = {}
@@ -30,7 +37,7 @@ class Inov3ptConnector(BaseConnector):
             title = item.get("title")
             if not title:
                 continue
-            anchor = quote(str(title).lower().replace(" ", "-"))
+            anchor = quote(self._slugify_fragment(str(title)))
             url = f"{self.source.jobs_url}#{anchor}"
             item["source_url"] = url
             item["application_url"] = url
@@ -55,8 +62,8 @@ class Inov3ptConnector(BaseConnector):
             application_url=str(raw_item.get("application_url") or source_url),
             title=str(title),
             organization=self.source.name,
-            location_text=None,
-            city=None,
+            location_text=str(raw_item.get("location_text")) if raw_item.get("location_text") else None,
+            city=str(raw_item.get("city")) if raw_item.get("city") else None,
             region=None,
             country="France",
             contract_type=str(raw_item.get("contract_type")) if raw_item.get("contract_type") else None,
@@ -85,78 +92,68 @@ class Inov3ptConnector(BaseConnector):
             lines.append(line)
         return lines
 
-    def _is_title_line(self, line: str) -> bool:
-        low = line.lower()
-        return low.startswith("poste ")
-
-    def _is_aux_stage_heading(self, line: str) -> bool:
-        low = line.lower()
-        return low in {"offre de stage", "stages"}
-
     def _extract_items(self, lines: list[str]) -> list[dict[str, object]]:
-        raw_items: list[tuple[str, list[str]]] = []
-        current_title: str | None = None
-        current_extras: list[str] = []
+        items: list[tuple[str, list[str]]] = []
+        i = 0
+        n = len(lines)
 
-        for line in lines:
+        while i < n:
+            line = lines[i]
             low = line.lower()
 
-            if low.startswith("top of page") or low.startswith("institut technique agricole qualifié") or low.startswith("institut technique agricole qualifie"):
-                continue
-            if low.startswith("© "):
-                continue
+            if self.FOOTER_RE.match(low):
+                break
 
-            if self._is_title_line(line):
-                if current_title:
-                    raw_items.append((current_title, current_extras))
-                current_title = line
-                current_extras = []
-                continue
+            if low == "stages":
+                # section historique 2023 à ignorer
+                break
 
-            if current_title is None:
-                continue
-
-            if self._is_aux_stage_heading(line):
-                # on ne crée jamais une offre autonome avec ce libellé générique
-                current_extras.append(line)
-                continue
-
-            if (
-                re.match(r"^[a-zà-ÿ]", line)
-                and "logo offre pourvue" not in low
-                and "recrutement terminé" not in low
-                and "recrutement termine" not in low
-                and not re.search(r"\b20\d{2}\b", line)
-            ):
-                current_title = f"{current_title} {line}".strip()
+            if self._is_position_title(line):
+                title = line
+                if i + 1 < n and self._is_title_continuation(lines[i + 1]):
+                    title = normalize_spaces(f"{title} {lines[i + 1]}")
+                    i += 1
+                extras: list[str] = []
+                j = i + 1
+                while j < n and not self._starts_new_item(lines[j]):
+                    if self.FOOTER_RE.match(lines[j].lower()) or lines[j].lower() == "stages":
+                        break
+                    extras.append(lines[j])
+                    j += 1
+                items.append((title, extras))
+                i = j
                 continue
 
-            current_extras.append(line)
+            if low == "offre de stage":
+                extras: list[str] = []
+                title = "Offre de stage"
+                if i + 1 < n and self.DATE_RANGE_RE.match(lines[i + 1]):
+                    title = f"Offre de stage - {lines[i + 1]}"
+                    extras.append(lines[i + 1])
+                    i += 1
+                j = i + 1
+                while j < n and not self._starts_new_item(lines[j]):
+                    if self.FOOTER_RE.match(lines[j].lower()) or lines[j].lower() == "stages":
+                        break
+                    extras.append(lines[j])
+                    j += 1
+                items.append((title, extras))
+                i = j
+                continue
 
-        if current_title:
-            raw_items.append((current_title, current_extras))
+            i += 1
 
         normalized: list[dict[str, object]] = []
-        for title, extras in raw_items:
+        for title, extras in items:
             title = normalize_spaces(title)
-            if not title:
-                continue
-            if self._is_aux_stage_heading(title):
+            if not title or title.lower() == "stages":
                 continue
 
             extras = [normalize_spaces(x) for x in extras if normalize_spaces(x)]
-            blob = " ".join(extras).lower()
-            nearby_blob = " ".join(extras[:6]).lower()
             description_text = "\n\n".join(extras).strip() or None
-            contract_type = self._infer_contract_type(title, blob)
+            contract_type = self._infer_contract_type(title, description_text or "")
             offer_type = self._infer_offer_type(title, contract_type)
-            is_filled = (
-                "logo offre pourvue" in nearby_blob
-                or "logo offre pourvue" in blob
-                or "recrutement terminé" in blob
-                or "recrutement termine" in blob
-                or "offre pourvue" in blob
-            )
+            is_filled = self._detect_filled_status(title, extras)
 
             normalized.append(
                 {
@@ -178,11 +175,72 @@ class Inov3ptConnector(BaseConnector):
 
         return normalized
 
-    def _infer_contract_type(self, title: str, blob: str) -> str | None:
-        low = f"{title} {blob}".lower()
+    def _is_position_title(self, line: str) -> bool:
+        return bool(self.TITLE_PREFIX_RE.match(line.strip()))
+
+    def _is_title_continuation(self, line: str) -> bool:
+        low = line.lower()
+        if self._starts_new_item(line):
+            return False
+        if self.DATE_RANGE_RE.match(line):
+            return False
+        return low[:1].islower()
+
+    def _starts_new_item(self, line: str) -> bool:
+        low = line.lower()
+        return (
+            self._is_position_title(line)
+            or low == "offre de stage"
+            or low == "stages"
+            or self.FOOTER_RE.match(low) is not None
+        )
+
+    def _detect_filled_status(self, title: str, extras: list[str]) -> bool:
+        if not self._normalized_html:
+            return False
+        key = self._normalize_for_search(title)
+        positions = []
+        if key:
+            pos = self._normalized_html.find(key)
+            if pos >= 0:
+                positions.append(pos)
+        for extra in extras[:2]:
+            extra_key = self._normalize_for_search(extra)
+            if extra_key:
+                pos = self._normalized_html.find(extra_key)
+                if pos >= 0:
+                    positions.append(pos)
+        if not positions:
+            return False
+        pos = min(positions)
+        nearby = self._normalized_html[pos : pos + 2500]
+        return (
+            "logo offre pourvue" in nearby
+            or "offre pourvue" in nearby
+            or "recrutement termine" in nearby
+        )
+
+    def _normalize_for_search(self, value: str) -> str:
+        value = html.unescape(value)
+        value = unicodedata.normalize("NFKD", value)
+        value = "".join(ch for ch in value if not unicodedata.combining(ch))
+        value = value.lower().replace("’", "'")
+        value = re.sub(r"\s+", " ", value)
+        return value
+
+    def _slugify_fragment(self, value: str) -> str:
+        value = self._normalize_for_search(value)
+        value = re.sub(r"[^a-z0-9]+", "-", value)
+        value = re.sub(r"-{2,}", "-", value).strip("-")
+        return value or "offre"
+
+    def _infer_contract_type(self, title: str, description: str) -> str | None:
+        low = f"{title} {description}".lower()
+        if "service civique" in low:
+            return "service civique"
         if "alternance" in low or "apprentissage" in low:
             return "alternance"
-        if "stage" in low or "stag" in low:
+        if "stage" in low:
             return "stage"
         if "cdi" in low:
             return "cdi"
@@ -191,10 +249,12 @@ class Inov3ptConnector(BaseConnector):
         return None
 
     def _infer_offer_type(self, title: str, contract_type: str | None) -> str | None:
-        if contract_type in {"cdi", "cdd"}:
+        if contract_type in {"cdi", "cdd", "service civique"}:
             return "emploi"
         if contract_type == "alternance":
             return "alternance"
         if contract_type == "stage":
+            return "stage"
+        if title.lower().startswith("offre de stage"):
             return "stage"
         return "emploi"
