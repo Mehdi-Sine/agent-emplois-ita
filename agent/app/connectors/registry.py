@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+from app.connectors.acta import ActaConnector
 from app.connectors.arvalis import ArvalisConnector
+from app.connectors.armeflhor import ArmeflhorConnector
+from app.connectors.astredhor import AstredhorConnector
 from app.connectors.base import BaseConnector
+from app.connectors.ceva import CevaConnector
+from app.connectors.cnpf import CnpfConnector
 from app.connectors.ctifl import CtiflConnector
 from app.connectors.idele import IdeleConnector
 from app.connectors.ifip import IfipConnector
+from app.connectors.inov3pt import Inov3ptConnector
 from app.connectors.iteipmai import IteipmaiConnector
 from app.connectors.itavi import ItaviConnector
 from app.connectors.terres_inovia import TerresInoviaConnector
@@ -12,10 +18,16 @@ from app.models import SourceConfig
 
 
 CONNECTOR_REGISTRY: dict[str, type[BaseConnector]] = {
+    "acta": ActaConnector,
     "arvalis": ArvalisConnector,
+    "armeflhor": ArmeflhorConnector,
+    "astredhor": AstredhorConnector,
+    "ceva": CevaConnector,
+    "cnpf": CnpfConnector,
     "ctifl": CtiflConnector,
     "idele": IdeleConnector,
     "ifip": IfipConnector,
+    "inov3pt": Inov3ptConnector,
     "iteipmai": IteipmaiConnector,
     "itavi": ItaviConnector,
     "terres_inovia": TerresInoviaConnector,

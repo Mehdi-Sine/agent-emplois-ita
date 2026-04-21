@@ -2,10 +2,8 @@ name: ita-jobs-daily
 
 on:
   schedule:
-    - cron: '1 22 * * *'
-    - cron: '1 23 * * *'
-    - cron: '1 10 * * *'
-    - cron: '1 11 * * *'
+    - cron: '1 0 * * *'
+      timezone: 'Europe/Paris'
   workflow_dispatch:
 
 jobs:
