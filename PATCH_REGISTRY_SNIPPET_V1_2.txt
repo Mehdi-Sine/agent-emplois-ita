@@ -1,0 +1,18 @@
+# Si votre registry est EXPLICITE (et non dynamique), ajoutez ces imports/mappings.
+# Fichier probable : agent/app/connectors/registry.py
+
+from app.connectors.acta import ActaConnector
+from app.connectors.armeflhor import ArmeflhorConnector
+from app.connectors.astredhor import AstredhorConnector
+from app.connectors.ceva import CevaConnector
+from app.connectors.inov3pt import Inov3ptConnector
+from app.connectors.cnpf import CnpfConnector
+
+CONNECTOR_REGISTRY.update({
+    "acta": ActaConnector,
+    "armeflhor": ArmeflhorConnector,
+    "astredhor": AstredhorConnector,
+    "ceva": CevaConnector,
+    "inov3pt": Inov3ptConnector,
+    "cnpf": CnpfConnector,
+})
