@@ -30,7 +30,8 @@ class Inov3ptConnector(BaseConnector):
             title = item.get("title")
             if not title:
                 continue
-            url = f"{self.source.jobs_url}#{quote(str(title).lower().replace(' ', '-'))}"
+            anchor = quote(str(title).lower().replace(" ", "-"))
+            url = f"{self.source.jobs_url}#{anchor}"
             item["source_url"] = url
             item["application_url"] = url
             self._items_by_url[url] = item
@@ -41,10 +42,7 @@ class Inov3ptConnector(BaseConnector):
     def parse_offer(self, client: Client, url: str) -> dict[str, object] | None:
         if not self._items_by_url:
             self.discover_offer_urls(client)
-        item = self._items_by_url.get(url)
-        if not item:
-            return None
-        return item
+        return self._items_by_url.get(url)
 
     def normalize_offer(self, raw_item: dict[str, object]) -> NormalizedOffer:
         title = raw_item.get("title") or "Offre inov3PT"
@@ -66,7 +64,13 @@ class Inov3ptConnector(BaseConnector):
             remote_mode=None,
             posted_at=None,
             description_text=str(raw_item.get("description_text")) if raw_item.get("description_text") else None,
-            content_hash=content_hash([source_url, str(title), str(raw_item.get("contract_type")), str(raw_item.get("offer_type")), str(raw_item.get("is_filled"))]),
+            content_hash=content_hash([
+                source_url,
+                str(title),
+                str(raw_item.get("contract_type")),
+                str(raw_item.get("offer_type")),
+                str(raw_item.get("is_filled")),
+            ]),
             raw_payload=raw_item,
         )
 
@@ -83,63 +87,72 @@ class Inov3ptConnector(BaseConnector):
 
     def _is_title_line(self, line: str) -> bool:
         low = line.lower()
-        return low.startswith("poste ") or low == "offre de stage" or low == "stages"
+        return low.startswith("poste ")
+
+    def _is_aux_stage_heading(self, line: str) -> bool:
+        low = line.lower()
+        return low in {"offre de stage", "stages"}
 
     def _extract_items(self, lines: list[str]) -> list[dict[str, object]]:
-        items: list[dict[str, object]] = []
-        current: dict[str, object] | None = None
+        raw_items: list[tuple[str, list[str]]] = []
+        current_title: str | None = None
+        current_extras: list[str] = []
 
         for line in lines:
             low = line.lower()
 
-            if low.startswith("top of page") or low.startswith("institut technique agricole qualifié") or low.startswith("© "):
+            if low.startswith("top of page") or low.startswith("institut technique agricole qualifié") or low.startswith("institut technique agricole qualifie"):
+                continue
+            if low.startswith("© "):
                 continue
 
             if self._is_title_line(line):
-                if current:
-                    items.append(current)
-                current = {"title": line, "extras": []}
+                if current_title:
+                    raw_items.append((current_title, current_extras))
+                current_title = line
+                current_extras = []
                 continue
 
-            if not current:
+            if current_title is None:
                 continue
 
-            if self._is_title_line(line):
-                items.append(current)
-                current = {"title": line, "extras": []}
+            if self._is_aux_stage_heading(line):
+                # on ne crée jamais une offre autonome avec ce libellé générique
+                current_extras.append(line)
                 continue
 
-            # continuation title lines
             if (
-                current["title"] != "Offre de stage"
-                and current["title"] != "Stages"
-                and re.match(r"^[a-zà-ÿ]", line)
+                re.match(r"^[a-zà-ÿ]", line)
                 and "logo offre pourvue" not in low
                 and "recrutement terminé" not in low
                 and "recrutement termine" not in low
                 and not re.search(r"\b20\d{2}\b", line)
             ):
-                current["title"] = f"{current['title']} {line}".strip()
+                current_title = f"{current_title} {line}".strip()
                 continue
 
-            current["extras"].append(line)
+            current_extras.append(line)
 
-        if current:
-            items.append(current)
+        if current_title:
+            raw_items.append((current_title, current_extras))
 
         normalized: list[dict[str, object]] = []
-        for item in items:
-            title = str(item.get("title") or "").strip()
-            extras = [normalize_spaces(x) for x in item.get("extras", []) if normalize_spaces(x)]
+        for title, extras in raw_items:
+            title = normalize_spaces(title)
             if not title:
                 continue
+            if self._is_aux_stage_heading(title):
+                continue
 
+            extras = [normalize_spaces(x) for x in extras if normalize_spaces(x)]
             blob = " ".join(extras).lower()
+            nearby_blob = " ".join(extras[:6]).lower()
             description_text = "\n\n".join(extras).strip() or None
             contract_type = self._infer_contract_type(title, blob)
             offer_type = self._infer_offer_type(title, contract_type)
             is_filled = (
-                "logo offre pourvue" in blob
+                "logo offre pourvue" in nearby_blob
+                or "logo offre pourvue" in blob
                 or "recrutement terminé" in blob
                 or "recrutement termine" in blob
                 or "offre pourvue" in blob

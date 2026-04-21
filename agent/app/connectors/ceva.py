@@ -11,15 +11,15 @@ from app.models import NormalizedOffer
 
 
 class CevaConnector(BaseConnector):
-    TITLE_RE = re.compile(r"OFFRE D[’']EMPLOI\s*:?\s*(?P<title>[A-Z0-9() \-]{8,})", re.IGNORECASE)
+    MARKERS = {"OFFRE D’EMPLOI :", "OFFRE D'EMPLOI :", "OFFRE D’EMPLOI", "OFFRE D'EMPLOI"}
 
     def discover_offer_urls(self, client: Client) -> list[str]:
         response = client.get(str(self.source.jobs_url))
         response.raise_for_status()
-        text = normalize_spaces(response.text.replace("\n", " "))
-        if self.TITLE_RE.search(text) or "OFFRE D’EMPLOI" in response.text or "OFFRE D'EMPLOI" in response.text:
-            return [str(response.url)]
-        return []
+        tree = html_tree(response.text)
+        lines = self._extract_lines(tree)
+        title = self._extract_title(lines)
+        return [str(response.url)] if title else []
 
     def parse_offer(self, client: Client, url: str) -> dict[str, object] | None:
         response = client.get(url)
@@ -32,18 +32,16 @@ class CevaConnector(BaseConnector):
             return None
 
         contract_type = self._infer_contract_type(title)
-        location_text = "Pleubian (22610)"
-        city = "Pleubian"
-        description_text = self._extract_description(lines)
+        description_text = self._extract_description(lines, title)
         offer_type = self._infer_offer_type(title, contract_type, description_text)
 
         return {
             "source_url": url,
-            "application_url": url,
+            "application_url": "mailto:algue@ceva.fr",
             "title": title,
             "description_text": description_text,
-            "location_text": location_text,
-            "city": city,
+            "location_text": "Pleubian (22610)",
+            "city": "Pleubian",
             "region": "Bretagne",
             "country": "France",
             "contract_type": contract_type,
@@ -76,7 +74,13 @@ class CevaConnector(BaseConnector):
             remote_mode=None,
             posted_at=None,
             description_text=str(raw_item.get("description_text")) if raw_item.get("description_text") else None,
-            content_hash=content_hash([source_url, str(title), str(location), str(raw_item.get("contract_type")), str(raw_item.get("offer_type"))]),
+            content_hash=content_hash([
+                source_url,
+                str(title),
+                str(location),
+                str(raw_item.get("contract_type")),
+                str(raw_item.get("offer_type")),
+            ]),
             raw_payload=raw_item,
         )
 
@@ -87,24 +91,25 @@ class CevaConnector(BaseConnector):
 
     def _extract_title(self, lines: list[str]) -> str | None:
         for idx, line in enumerate(lines):
-            if line in {"OFFRE D’EMPLOI :", "OFFRE D'EMPLOI :", "OFFRE D’EMPLOI", "OFFRE D'EMPLOI"} and idx + 1 < len(lines):
-                return lines[idx + 1]
-        for line in lines:
-            if "TECHNICIEN" in line.upper() or "INGENIEUR" in line.upper() or "CHARGÉ" in line.upper() or "CHARGE" in line.upper():
-                return line
+            if line in self.MARKERS and idx + 1 < len(lines):
+                candidate = normalize_spaces(lines[idx + 1])
+                if candidate:
+                    return candidate
         return None
 
-    def _extract_description(self, lines: list[str]) -> str | None:
-        kept = []
+    def _extract_description(self, lines: list[str], title: str) -> str | None:
+        kept: list[str] = []
         started = False
         for line in lines:
-            if line.upper().startswith("OFFRE D"):
+            if line == title:
                 started = True
                 continue
             if not started:
                 continue
-            if line.startswith("Centre d'Étude") or line.startswith("Centre d'Etude"):
+            if line.startswith("Partagez cette page") or line.startswith("Centre d'Étude") or line.startswith("Centre d'Etude"):
                 break
+            if line in self.MARKERS:
+                continue
             kept.append(line)
         text = "\n\n".join(kept).strip()
         return text or None

@@ -171,8 +171,11 @@ class CnpfConnector(BaseConnector):
     def _extract_city(self, location_text: str | None) -> str | None:
         if not location_text:
             return None
-        city = location_text.split(" ou ")[0].strip()
-        city = city.split("(")[0].strip()
+        if " ou " in location_text.lower():
+            parts = [normalize_spaces(re.sub(r"\s*\(\d{2,3}\)", "", part).strip()) for part in re.split(r"\bou\b", location_text, flags=re.IGNORECASE)]
+            parts = [p for p in parts if p]
+            return " ou ".join(parts) or None
+        city = location_text.split("(")[0].strip()
         return normalize_spaces(city) or None
 
     def _extract_contract_type(self, summary: str | None) -> str | None:

@@ -27,6 +27,7 @@ class ActaConnector(BaseConnector):
         r"avant le (?P<day>\d{1,2})/(?P<month>\d{1,2})/(?P<year>\d{4})",
         re.IGNORECASE,
     )
+    DURATION_RE = re.compile(r"^\(?\d+\s+mois\)?$", re.IGNORECASE)
 
     NOISE_LINES = {
         "postuler",
@@ -76,7 +77,7 @@ class ActaConnector(BaseConnector):
         header_lines = self._extract_header_lines(lines, title)
 
         contract_type = self._extract_contract_type(header_lines) or self._infer_contract_type(title)
-        location_text = self._extract_location(header_lines)
+        location_text = self._extract_location(header_lines, url)
         city = self._extract_city(location_text)
         remote_mode = self._extract_remote_mode(header_lines)
         posted_at = self._extract_posted_at(response.text)
@@ -187,16 +188,35 @@ class ActaConnector(BaseConnector):
                 return contract
         return None
 
-    def _extract_location(self, header_lines: list[str]) -> str | None:
+    def _extract_location(self, header_lines: list[str], url: str) -> str | None:
         for line in header_lines:
-            lower = line.lower()
+            low = line.lower()
             if self._infer_contract_type(line):
                 continue
-            if "télétravail" in lower or "salaire" in lower or "expérience" in lower or "éducation" in lower or "education" in lower:
+            if self.DURATION_RE.match(line):
                 continue
-            if lower.startswith("il y a "):
+            if any(token in low for token in [
+                "télétravail",
+                "teletravail",
+                "salaire",
+                "expérience",
+                "experience",
+                "éducation",
+                "education",
+            ]):
                 continue
-            return line
+            if low.startswith("il y a "):
+                continue
+            # ville simple sur WTTJ: Paris / Lyon
+            if re.match(r"^[A-Za-zÀ-ÿ' -]+$", line):
+                return line
+
+        parsed = urlsplit(url)
+        slug = parsed.path.rstrip("/").rsplit("_", 1)[-1].strip().lower()
+        if slug == "paris":
+            return "Paris"
+        if slug == "lyon":
+            return "Lyon"
         return None
 
     def _extract_city(self, location_text: str | None) -> str | None:
@@ -259,6 +279,38 @@ class ActaConnector(BaseConnector):
                 return url
         return None
 
+    def _infer_contract_type(self, text: str | None) -> str | None:
+        if not text:
+            return None
+        low = normalize_spaces(text)
+        if not low:
+            return None
+        low = low.lower()
+        if "alternance" in low or "apprentissage" in low or "apprenti" in low:
+            return "alternance"
+        if "stage" in low:
+            return "stage"
+        if "cdi" in low:
+            return "cdi"
+        if "cdd" in low:
+            return "cdd"
+        return None
+
+    def _infer_offer_type(self, title: str | None, contract_type: str | None, description_text: str | None) -> str | None:
+        contract_low = (contract_type or "").lower()
+        low = " ".join(filter(None, [title, description_text])).lower()
+        if contract_low in {"cdi", "cdd"}:
+            return "emploi"
+        if contract_low == "alternance":
+            return "alternance"
+        if contract_low == "stage":
+            return "stage"
+        if "alternance" in low:
+            return "alternance"
+        if "stage" in low:
+            return "stage"
+        return "emploi"
+
     def _extract_deadline(self, lines: list[str]) -> datetime | None:
         blob = "\n".join(lines)
         match = self.DEADLINE_RE.search(blob)
@@ -273,56 +325,12 @@ class ActaConnector(BaseConnector):
         except ValueError:
             return None
 
-    def _infer_contract_type(self, text: str | None) -> str | None:
-        if not text:
-            return None
-        low = normalize_spaces(text)
-        if not low:
-            return None
-        low = low.lower()
-        if "alternance" in low or "apprentissage" in low:
-            return "alternance"
-        if "stage" in low:
-            return "stage"
-        if "cdi" in low:
-            return "cdi"
-        if "cdd" in low or "temporaire" in low:
-            return "cdd"
-        return None
-
-    def _infer_offer_type(
-        self,
-        title: str | None,
-        contract_type: str | None,
-        description_text: str | None,
-    ) -> str | None:
-        contract_low = (contract_type or "").lower()
-        title_low = (title or "").lower()
-        desc_low = (description_text or "").lower()
-
-        if contract_low in {"cdi", "cdd"}:
-            return "emploi"
-        if contract_low == "alternance":
-            return "alternance"
-        if contract_low == "stage":
-            return "stage"
-        if "alternance" in title_low or "apprentissage" in title_low:
-            return "alternance"
-        if "stage" in title_low or "stagiaire" in title_low:
-            return "stage"
-        if "alternance" in desc_low or "apprentissage" in desc_low:
-            return "alternance"
-        if "stage" in desc_low:
-            return "stage"
-        return "emploi"
-
     def _is_filled(self, lines: list[str]) -> bool:
         blob = "\n".join(lines).lower()
         return (
-            "n'est plus disponible" in blob
-            or "n’est plus disponible" in blob
-            or "vous ne pouvez plus postuler" in blob
-            or "offre pourvue" in blob
+            "offre pourvue" in blob
+            or "cette offre n'est plus disponible" in blob
+            or "cette offre n’est plus disponible" in blob
         )
 
     def _node_text(self, tree, selectors: list[str]) -> str | None:

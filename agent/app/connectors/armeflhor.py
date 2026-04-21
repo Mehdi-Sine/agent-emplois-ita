@@ -23,20 +23,27 @@ class ArmeflhorConnector(BaseConnector):
         r'(?:article:published_time|datePublished)"?\s*[:=]\s*"(?P<value>\d{4}-\d{2}-\d{2})',
         re.IGNORECASE,
     )
-    MONTHS_FR = {
-        "janvier": 1, "janv": 1, "janv.": 1,
-        "février": 2, "fevrier": 2, "févr": 2, "fevr": 2, "févr.": 2, "fevr.": 2,
-        "mars": 3,
-        "avril": 4, "avr": 4, "avr.": 4,
-        "mai": 5,
-        "juin": 6,
-        "juillet": 7, "juil": 7, "juil.": 7,
-        "août": 8, "aout": 8,
-        "septembre": 9, "sept": 9, "sept.": 9,
-        "octobre": 10, "oct": 10, "oct.": 10,
-        "novembre": 11, "nov": 11, "nov.": 11,
-        "décembre": 12, "decembre": 12, "déc": 12, "dec": 12, "déc.": 12, "dec.": 12,
+    TITLE_BLACKLIST = {
+        "l'armeflhor recrute !",
+        "l’armeflhor recrute !",
     }
+    JOB_TOKENS = (
+        "recrute",
+        "chargé",
+        "charge",
+        "technicien",
+        "ingénieur",
+        "ingenieur",
+        "assistant",
+        "service civique",
+        "volontaire",
+        "cdd",
+        "cdi",
+        "vsc",
+        "stage",
+        "alternance",
+        "mission",
+    )
 
     def discover_offer_urls(self, client: Client) -> list[str]:
         response = client.get(str(self.source.jobs_url))
@@ -46,24 +53,13 @@ class ArmeflhorConnector(BaseConnector):
         urls: list[str] = []
         seen: set[str] = set()
 
-        selectors = [
-            "h2 a[href]",
-            "article a[href]",
-        ]
-        candidates = []
-        for selector in selectors:
-            candidates.extend(tree.css(selector))
-
-        for node in candidates:
+        for node in tree.css("h2 a[href], article a[href]"):
             href = node.attributes.get("href")
             text = normalize_spaces(node.text(separator=" ", strip=True))
             url = self._canonicalize_offer_url(absolute_url(str(response.url), href))
-            if not url:
+            if not url or not text:
                 continue
-            if not text:
-                continue
-            lower = text.lower()
-            if lower in {"recrutement", "adhésion", "adhesion"}:
+            if not self._looks_like_job_title(text):
                 continue
             if url in seen:
                 continue
@@ -79,7 +75,7 @@ class ArmeflhorConnector(BaseConnector):
 
         lines = self._extract_lines(tree)
         title = self._extract_title(tree, lines)
-        if not title:
+        if not title or not self._looks_like_job_title(title):
             return None
 
         description_text = self._extract_description(lines, title)
@@ -147,6 +143,16 @@ class ArmeflhorConnector(BaseConnector):
             raw_payload=raw_item,
         )
 
+    def _looks_like_job_title(self, text: str | None) -> bool:
+        if not text:
+            return False
+        low = normalize_spaces(text).lower()
+        if not low or low in self.TITLE_BLACKLIST:
+            return False
+        if low.endswith("?"):
+            return False
+        return any(token in low for token in self.JOB_TOKENS)
+
     def _canonicalize_offer_url(self, url: str | None) -> str | None:
         if not url:
             return None
@@ -172,12 +178,18 @@ class ArmeflhorConnector(BaseConnector):
             node = tree.css_first(selector)
             if node:
                 text = normalize_spaces(node.text(separator=" ", strip=True))
-                if text and text.lower() != "l'armeflhor recrute !":
+                if text and self._looks_like_job_title(text):
                     return text
 
-        for idx, line in enumerate(lines):
-            if line.lower() == "l'armeflhor recrute !" and idx + 1 < len(lines):
-                return lines[idx + 1]
+        for idx, line in enumerate(lines[:20]):
+            if normalize_spaces(line).lower() in self.TITLE_BLACKLIST:
+                for candidate in lines[idx + 1 : idx + 6]:
+                    if self._looks_like_job_title(candidate):
+                        return candidate
+
+        for line in lines[:25]:
+            if self._looks_like_job_title(line):
+                return line
         return None
 
     def _extract_description(self, lines: list[str], title: str) -> str | None:
@@ -194,15 +206,17 @@ class ArmeflhorConnector(BaseConnector):
             lower = line.lower()
             if lower in {"coordonnées", "coordonnees", "a propos", "publications", "contact"}:
                 break
-            if lower in {"l'armeflhor recrute !"}:
+            if lower in self.TITLE_BLACKLIST:
                 continue
             kept.append(line)
         return "\n\n".join(kept).strip() or None
 
     def _extract_contract_type(self, lines: list[str], title: str, description_text: str | None) -> str | None:
-        for line in lines:
-            if "contrat :" in line.lower():
-                return self._infer_contract_type(line)
+        for line in lines[:80]:
+            if "contrat" in line.lower():
+                contract = self._infer_contract_type(line)
+                if contract:
+                    return contract
         return self._infer_contract_type(" ".join(filter(None, [title, description_text])))
 
     def _extract_location(self, lines: list[str]) -> str | None:
@@ -214,8 +228,10 @@ class ArmeflhorConnector(BaseConnector):
     def _extract_city(self, location_text: str | None) -> str | None:
         if not location_text:
             return None
-        city = location_text.split("(")[0].split("-")[0].strip()
-        return normalize_spaces(city) or None
+        m = re.search(r"^(?P<city>.+?)\s*\(\d{5}\)", location_text)
+        if m:
+            return normalize_spaces(m.group("city")) or None
+        return normalize_spaces(location_text.split(" - ", 1)[0]) or None
 
     def _extract_posted_at(self, html: str) -> datetime | None:
         match = self.PUBLISHED_RE.search(html)
