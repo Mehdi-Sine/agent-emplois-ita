@@ -54,3 +54,23 @@ jobs:
         with:
           name: ita-jobs-manual-runs
           path: agent/data/runs
+
+      - name: Send run summary email
+        if: always()
+        continue-on-error: true
+        working-directory: agent
+        run: python -m app.reporting.run_summary_email
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SUMMARY_EMAIL_ENABLED: ${{ vars.SUMMARY_EMAIL_ENABLED }}
+          SUMMARY_EMAIL_TO: ${{ vars.SUMMARY_EMAIL_TO }}
+          SUMMARY_EMAIL_FROM: ${{ vars.SUMMARY_EMAIL_FROM }}
+          SUMMARY_EMAIL_SUBJECT_PREFIX: ${{ vars.SUMMARY_EMAIL_SUBJECT_PREFIX }}
+          APP_MONITORING_URL: ${{ vars.APP_MONITORING_URL }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_USE_TLS: ${{ vars.SMTP_USE_TLS }}
+          SMTP_USE_SSL: ${{ vars.SMTP_USE_SSL }}
