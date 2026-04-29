@@ -59,7 +59,7 @@ jobs:
         if: always()
         continue-on-error: true
         working-directory: agent
-        run: python -m app.reporting.run_summary_email
+        run: python -m app.run_summary_email
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
