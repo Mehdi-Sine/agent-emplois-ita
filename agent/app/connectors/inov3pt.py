@@ -13,9 +13,16 @@ from app.models import NormalizedOffer
 
 
 class Inov3ptConnector(BaseConnector):
-    TITLE_PREFIX_RE = re.compile(r"^poste\s+d[eu]'|^poste\s+de\s+|^poste\s+d’", re.IGNORECASE)
-    DATE_RANGE_RE = re.compile(r"^[A-Za-zÀ-ÿ]+(?:-[A-Za-zÀ-ÿ]+)?\s+[0-9]{4}$")
+    TITLE_RE = re.compile(r"^poste\s+(?:de|d['’])", re.IGNORECASE)
+    DATE_RANGE_RE = re.compile(
+        r"^(janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|septembre|octobre|novembre|décembre|decembre)"
+        r"(?:\s*[-–]\s*"
+        r"(janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|septembre|octobre|novembre|décembre|decembre))?"
+        r"\s+\d{4}$",
+        re.IGNORECASE,
+    )
     FOOTER_RE = re.compile(r"^institut technique agricole qualifi", re.IGNORECASE)
+    FILLED_RE = re.compile(r"(offre pourvue|recrutement termin[ée])", re.IGNORECASE)
 
     def __init__(self, source) -> None:
         super().__init__(source)
@@ -25,20 +32,24 @@ class Inov3ptConnector(BaseConnector):
     def discover_offer_urls(self, client: Client) -> list[str]:
         response = client.get(str(self.source.jobs_url))
         response.raise_for_status()
-        tree = html_tree(response.text)
-        lines = self._extract_lines(tree)
+
         self._normalized_html = self._normalize_for_search(html.unescape(response.text))
 
-        items = self._extract_items(lines)
-        self._items_by_url = {}
+        tree = html_tree(response.text)
+        stream = self._extract_stream(tree)
+        items = self._extract_items(stream)
 
+        self._items_by_url = {}
         urls: list[str] = []
+
         for item in items:
             title = item.get("title")
             if not title:
                 continue
+
             anchor = quote(self._slugify_fragment(str(title)))
             url = f"{self.source.jobs_url}#{anchor}"
+
             item["source_url"] = url
             item["application_url"] = url
             self._items_by_url[url] = item
@@ -71,154 +82,220 @@ class Inov3ptConnector(BaseConnector):
             remote_mode=None,
             posted_at=None,
             description_text=str(raw_item.get("description_text")) if raw_item.get("description_text") else None,
-            content_hash=content_hash([
-                source_url,
-                str(title),
-                str(raw_item.get("contract_type")),
-                str(raw_item.get("offer_type")),
-                str(raw_item.get("is_filled")),
-            ]),
+            content_hash=content_hash(
+                [
+                    source_url,
+                    str(title),
+                    str(raw_item.get("contract_type")),
+                    str(raw_item.get("offer_type")),
+                    str(raw_item.get("is_filled")),
+                ]
+            ),
             raw_payload=raw_item,
         )
 
-    def _extract_lines(self, tree) -> list[str]:
-        body = tree.body
-        text = body.text(separator="\n", strip=True) if body else tree.text(separator="\n", strip=True)
-        lines: list[str] = []
-        for raw_line in text.splitlines():
-            line = normalize_spaces(raw_line)
-            if not line:
-                continue
-            lines.append(line)
-        return lines
+    # -------------------------------------------------------------------------
+    # STREAM EXTRACTION
+    # -------------------------------------------------------------------------
 
-    def _extract_items(self, lines: list[str]) -> list[dict[str, object]]:
-        items: list[tuple[str, list[str]]] = []
+    def _extract_stream(self, tree) -> list[dict[str, str]]:
+        stream: list[dict[str, str]] = []
+
+        for node in tree.css("[data-testid='richTextElement'], img[alt]"):
+            alt = normalize_spaces(node.attributes.get("alt") or "")
+            if alt:
+                stream.append({"kind": "badge", "text": alt})
+                continue
+
+            text = normalize_spaces(node.text(separator=" ", strip=True))
+            if not text:
+                continue
+
+            text = self._clean_text(text)
+            if not text:
+                continue
+
+            stream.append({"kind": "text", "text": text})
+
+        return stream
+
+    def _clean_text(self, value: str) -> str:
+        value = normalize_spaces(value)
+        if not value:
+            return ""
+
+        low = value.lower()
+
+        if low in {"recrutements", "recrutement"}:
+            return ""
+        if low.startswith("poster"):
+            return ""
+        if value.startswith("#comp-"):
+            return ""
+        if "lire la vidéo" in low or "lire la video" in low:
+            return ""
+
+        return value
+
+    # -------------------------------------------------------------------------
+    # ITEM EXTRACTION
+    # -------------------------------------------------------------------------
+
+    def _extract_items(self, stream: list[dict[str, str]]) -> list[dict[str, object]]:
+        items: list[dict[str, object]] = []
         i = 0
-        n = len(lines)
+        n = len(stream)
 
         while i < n:
-            line = lines[i]
-            low = line.lower()
+            token = stream[i]
+
+            if token["kind"] != "text":
+                i += 1
+                continue
+
+            text = token["text"]
+            low = text.lower()
 
             if self.FOOTER_RE.match(low):
                 break
 
+            # On ignore la section historique en bas du site
             if low == "stages":
-                # section historique 2023 à ignorer
                 break
 
-            if self._is_position_title(line):
-                title = line
-                if i + 1 < n and self._is_title_continuation(lines[i + 1]):
-                    title = normalize_spaces(f"{title} {lines[i + 1]}")
-                    i += 1
+            if self._is_offer_start(text):
+                stage_mode = low == "offre de stage"
+                title = text
                 extras: list[str] = []
-                j = i + 1
-                while j < n and not self._starts_new_item(lines[j]):
-                    if self.FOOTER_RE.match(lines[j].lower()) or lines[j].lower() == "stages":
-                        break
-                    extras.append(lines[j])
-                    j += 1
-                items.append((title, extras))
-                i = j
-                continue
+                badge_filled = False
 
-            if low == "offre de stage":
-                extras: list[str] = []
-                title = "Offre de stage"
-                if i + 1 < n and self.DATE_RANGE_RE.match(lines[i + 1]):
-                    title = f"Offre de stage - {lines[i + 1]}"
-                    extras.append(lines[i + 1])
-                    i += 1
                 j = i + 1
-                while j < n and not self._starts_new_item(lines[j]):
-                    if self.FOOTER_RE.match(lines[j].lower()) or lines[j].lower() == "stages":
-                        break
-                    extras.append(lines[j])
+
+                if stage_mode and j < n and stream[j]["kind"] == "text" and self._is_date_range(stream[j]["text"]):
+                    title = f"Offre de stage - {stream[j]['text']}"
                     j += 1
-                items.append((title, extras))
+
+                while j < n:
+                    nxt = stream[j]
+
+                    if nxt["kind"] == "badge":
+                        if self._is_filled_badge(nxt["text"]):
+                            badge_filled = True
+                        j += 1
+                        continue
+
+                    nxt_text = nxt["text"]
+                    nxt_low = nxt_text.lower()
+
+                    if self.FOOTER_RE.match(nxt_low):
+                        break
+                    if nxt_low == "stages":
+                        break
+                    if self._is_offer_start(nxt_text):
+                        break
+
+                    if stage_mode and self._is_date_range(nxt_text) and title.lower() == "offre de stage":
+                        title = f"Offre de stage - {nxt_text}"
+                    else:
+                        if self._keep_as_description(nxt_text):
+                            extras.append(nxt_text)
+
+                    j += 1
+
+                is_filled = badge_filled or self._detect_filled_status(title)
+                contract_type = self._infer_contract_type(title, extras)
+                offer_type = self._infer_offer_type(title, contract_type)
+                description_text = "\n\n".join(extras).strip() or None
+
+                items.append(
+                    {
+                        "title": title,
+                        "description_text": description_text,
+                        "location_text": None,
+                        "city": None,
+                        "region": None,
+                        "country": "France",
+                        "contract_type": contract_type,
+                        "offer_type": offer_type,
+                        "remote_mode": None,
+                        "posted_at": None,
+                        "raw_posted_at": None,
+                        "is_filled": is_filled,
+                        "listing_status": "filled" if is_filled else "open",
+                    }
+                )
+
                 i = j
                 continue
 
             i += 1
 
-        normalized: list[dict[str, object]] = []
-        for title, extras in items:
-            title = normalize_spaces(title)
-            if not title or title.lower() == "stages":
-                continue
+        return items
 
-            extras = [normalize_spaces(x) for x in extras if normalize_spaces(x)]
-            description_text = "\n\n".join(extras).strip() or None
-            contract_type = self._infer_contract_type(title, description_text or "")
-            offer_type = self._infer_offer_type(title, contract_type)
-            is_filled = self._detect_filled_status(title, extras)
+    def _is_offer_start(self, text: str) -> bool:
+        low = text.lower()
+        return self._is_position_title(text) or low == "offre de stage"
 
-            normalized.append(
-                {
-                    "title": title,
-                    "description_text": description_text,
-                    "location_text": None,
-                    "city": None,
-                    "region": None,
-                    "country": "France",
-                    "contract_type": contract_type,
-                    "offer_type": offer_type,
-                    "remote_mode": None,
-                    "posted_at": None,
-                    "raw_posted_at": None,
-                    "is_filled": is_filled,
-                    "listing_status": "filled" if is_filled else "open",
-                }
-            )
+    def _is_position_title(self, text: str) -> bool:
+        return bool(self.TITLE_RE.match(text.strip()))
 
-        return normalized
+    def _is_date_range(self, text: str) -> bool:
+        return bool(self.DATE_RANGE_RE.match(text.strip()))
 
-    def _is_position_title(self, line: str) -> bool:
-        return bool(self.TITLE_PREFIX_RE.match(line.strip()))
+    def _is_filled_badge(self, text: str) -> bool:
+        return bool(self.FILLED_RE.search(text))
 
-    def _is_title_continuation(self, line: str) -> bool:
-        low = line.lower()
-        if self._starts_new_item(line):
+    def _keep_as_description(self, text: str) -> bool:
+        low = text.lower()
+
+        if not text:
             return False
-        if self.DATE_RANGE_RE.match(line):
+        if self._is_offer_start(text):
             return False
-        return low[:1].islower()
+        if low == "stages":
+            return False
+        if self.FOOTER_RE.match(low):
+            return False
+        if low.startswith("poster"):
+            return False
+        if "lire la vidéo" in low or "lire la video" in low:
+            return False
 
-    def _starts_new_item(self, line: str) -> bool:
-        low = line.lower()
-        return (
-            self._is_position_title(line)
-            or low == "offre de stage"
-            or low == "stages"
-            or self.FOOTER_RE.match(low) is not None
-        )
+        return True
 
-    def _detect_filled_status(self, title: str, extras: list[str]) -> bool:
+    # -------------------------------------------------------------------------
+    # FILLED STATUS
+    # -------------------------------------------------------------------------
+
+    def _detect_filled_status(self, title: str) -> bool:
         if not self._normalized_html:
             return False
+
         key = self._normalize_for_search(title)
-        positions = []
-        if key:
-            pos = self._normalized_html.find(key)
-            if pos >= 0:
-                positions.append(pos)
-        for extra in extras[:2]:
-            extra_key = self._normalize_for_search(extra)
-            if extra_key:
-                pos = self._normalized_html.find(extra_key)
-                if pos >= 0:
-                    positions.append(pos)
+        if not key:
+            return False
+
+        positions = [m.start() for m in re.finditer(re.escape(key), self._normalized_html)]
         if not positions:
             return False
-        pos = min(positions)
-        nearby = self._normalized_html[pos : pos + 2500]
-        return (
-            "logo offre pourvue" in nearby
-            or "offre pourvue" in nearby
-            or "recrutement termine" in nearby
-        )
+
+        for pos in positions[:3]:
+            nearby = self._normalized_html[max(0, pos - 2500) : pos + 7000]
+            if (
+                "logo offre pourvue" in nearby
+                or "offre pourvue" in nearby
+                or "offre-pourvue" in nearby
+                or "offre pourvue.png" in nearby
+                or "recrutement termine" in nearby
+                or "recrutement terminé" in nearby
+            ):
+                return True
+
+        return False
+
+    # -------------------------------------------------------------------------
+    # HELPERS
+    # -------------------------------------------------------------------------
 
     def _normalize_for_search(self, value: str) -> str:
         value = html.unescape(value)
@@ -226,7 +303,7 @@ class Inov3ptConnector(BaseConnector):
         value = "".join(ch for ch in value if not unicodedata.combining(ch))
         value = value.lower().replace("’", "'")
         value = re.sub(r"\s+", " ", value)
-        return value
+        return value.strip()
 
     def _slugify_fragment(self, value: str) -> str:
         value = self._normalize_for_search(value)
@@ -234,8 +311,8 @@ class Inov3ptConnector(BaseConnector):
         value = re.sub(r"-{2,}", "-", value).strip("-")
         return value or "offre"
 
-    def _infer_contract_type(self, title: str, description: str) -> str | None:
-        low = f"{title} {description}".lower()
+    def _infer_contract_type(self, title: str, extras: list[str]) -> str | None:
+        low = " ".join([title] + extras).lower()
         if "service civique" in low:
             return "service civique"
         if "alternance" in low or "apprentissage" in low:
@@ -255,6 +332,6 @@ class Inov3ptConnector(BaseConnector):
             return "alternance"
         if contract_type == "stage":
             return "stage"
-        if title.lower().startswith("offre de stage"):
+        if "stage" in title.lower():
             return "stage"
         return "emploi"

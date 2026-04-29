@@ -59,7 +59,7 @@ sources:
     name: ARMEFLHOR
     site_url: https://www.armeflhor.fr
     jobs_url: https://www.armeflhor.fr/category/recrutement/
-    enabled: false
+    enabled: true
     mode: http
     timeout_seconds: 20
 
@@ -75,7 +75,7 @@ sources:
     name: CEVA
     site_url: https://www.ceva-algues.com
     jobs_url: https://www.ceva-algues.com/le-ceva/recrutement/
-    enabled: false
+    enabled: true
     mode: http
     timeout_seconds: 20
 
@@ -83,7 +83,7 @@ sources:
     name: CNPF
     site_url: https://www.cnpf.fr
     jobs_url: https://www.cnpf.fr/le-cnpf-recrute
-    enabled: false
+    enabled: true
     mode: http
     timeout_seconds: 20
 
@@ -91,7 +91,7 @@ sources:
     name: inov3PT
     site_url: https://www.inov3pt.fr
     jobs_url: https://www.inov3pt.fr/recrutements
-    enabled: false
+    enabled: true
     mode: http
     timeout_seconds: 20
 
@@ -148,5 +148,13 @@ sources:
     site_url: https://itsap.asso.fr
     jobs_url: https://itsap.asso.fr/institut
     enabled: false
+    mode: http
+    timeout_seconds: 20
+
+  - slug: acta
+    name: ACTA
+    site_url: https://www.acta.asso.fr
+    jobs_url: https://www.welcometothejungle.com/fr/companies/acta/jobs
+    enabled: true
     mode: http
     timeout_seconds: 20
