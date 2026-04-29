@@ -1,0 +1,4 @@
+# Le workflow manuel réel de votre repo est `.github/workflows/manual.yml`.
+# Si votre webapp déclenche un workflow GitHub via API, utilisez cette valeur :
+#
+# GITHUB_WORKFLOW_FILE=manual.yml

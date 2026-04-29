@@ -1,0 +1,8 @@
+# Remplacer le bloc on: schedule: de votre workflow de collecte quotidien
+# par ce bloc (GitHub Actions supporte désormais le paramètre timezone).
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '1 0 * * *'
+      timezone: 'Europe/Paris'
