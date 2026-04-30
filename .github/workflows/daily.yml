@@ -2,13 +2,17 @@ name: ita-jobs-daily
 
 on:
   schedule:
-    - cron: '1 0 * * *'
-      timezone: 'Europe/Paris'
-  workflow_dispatch:
+    - cron: "1 0 * * *"
+      timezone: "Europe/Paris"
+
+concurrency:
+  group: ita-jobs-daily
+  cancel-in-progress: false
 
 jobs:
   collect:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: agent
@@ -19,7 +23,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -28,8 +32,8 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          JOBS_ARCHIVE_MISSED_THRESHOLD: '2'
-          USER_AGENT: 'ITA Jobs Bot/1.0 (+GitHub Actions)'
+          JOBS_ARCHIVE_MISSED_THRESHOLD: "2"
+          USER_AGENT: "ITA Jobs Bot/1.0 (+GitHub Actions)"
         run: python -m app.main_collect_daily
 
       - name: Upload run artifacts
@@ -38,3 +42,24 @@ jobs:
         with:
           name: ita-jobs-runs
           path: agent/data/runs
+          if-no-files-found: warn
+
+      - name: Send run summary email
+        if: always()
+        continue-on-error: true
+        working-directory: agent
+        run: python -m app.run_summary_email
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SUMMARY_EMAIL_ENABLED: ${{ vars.SUMMARY_EMAIL_ENABLED }}
+          SUMMARY_EMAIL_TO: ${{ vars.SUMMARY_EMAIL_TO }}
+          SUMMARY_EMAIL_FROM: ${{ vars.SUMMARY_EMAIL_FROM }}
+          SUMMARY_EMAIL_SUBJECT_PREFIX: ${{ vars.SUMMARY_EMAIL_SUBJECT_PREFIX }}
+          APP_MONITORING_URL: ${{ vars.APP_MONITORING_URL }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_USE_TLS: ${{ vars.SMTP_USE_TLS }}
+          SMTP_USE_SSL: ${{ vars.SMTP_USE_SSL }}
