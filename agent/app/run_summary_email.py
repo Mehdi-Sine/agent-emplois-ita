@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.message import EmailMessage
 from html import escape
+from pathlib import Path
 from typing import Any
 
 from supabase import create_client
@@ -154,6 +155,64 @@ def _pick_message(row: dict[str, Any]) -> str:
     return "—"
 
 
+def _truncate(value: Any, max_chars: int = 120) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "…"
+
+
+def _logo_subtype(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix in {".jpg", ".jpeg"}:
+        return "jpeg"
+    if suffix == ".png":
+        return "png"
+    if suffix == ".gif":
+        return "gif"
+    return "jpeg"
+
+
+def _find_logo_path() -> Path | None:
+    """Find the Acta logo without requiring a new environment variable.
+
+    Priority:
+    1. ACTA_LOGO_PATH, if explicitly provided.
+    2. webapp/public/acta-logo.jpg from the current working directory.
+    3. webapp/public/acta-logo.jpg from the repository root inferred from this file.
+    4. the legacy uploaded/local name logo.jpg, only useful for local tests.
+    """
+    candidates: list[Path] = []
+
+    env_path = os.getenv("ACTA_LOGO_PATH", "").strip()
+    if env_path:
+        candidates.append(Path(env_path))
+
+    cwd = Path.cwd()
+    candidates.extend(
+        [
+            cwd / "webapp" / "public" / "acta-logo.jpg",
+            cwd / "webapp" / "public" / "acta-logo.png",
+            cwd / "logo.jpg",
+        ]
+    )
+
+    current_file = Path(__file__).resolve()
+    for parent in current_file.parents:
+        candidates.extend(
+            [
+                parent / "webapp" / "public" / "acta-logo.jpg",
+                parent / "webapp" / "public" / "acta-logo.png",
+                parent / "logo.jpg",
+            ]
+        )
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def _build_summary_rows(client, pipeline_run: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, int]]:
     pipeline_run_id = pipeline_run["id"]
 
@@ -264,7 +323,49 @@ def _build_summary_rows(client, pipeline_run: dict[str, Any]) -> tuple[list[dict
     return rows, totals
 
 
-def _render_html(pipeline_run: dict[str, Any], rows: list[dict[str, Any]], totals: dict[str, int], monitoring_url: str | None) -> str:
+def _render_logo_block(inline_logo_cid: str | None) -> str:
+    if inline_logo_cid:
+        return f"""
+        <img src="cid:{escape(inline_logo_cid)}" width="148" alt="Acta - Les instituts techniques agricoles" style="display:block;width:148px;max-width:148px;height:auto;border:0;outline:none;text-decoration:none;" />
+        """
+    return """
+    <div style="font-size:34px;line-height:1;font-weight:900;letter-spacing:-0.06em;color:#000000;">acta</div>
+    <div style="margin-top:3px;font-size:9px;line-height:1.2;font-weight:700;letter-spacing:0.2em;color:#111827;text-transform:uppercase;">Les instituts<br />techniques agricoles</div>
+    """
+
+
+def _render_summary_cards(summary_cards: list[tuple[str, int]], pipeline_status: str) -> str:
+    accent_colors = ["#ffcd00", "#f6f3ee", "#ffffff", "#ffffff", "#e6007e", "#00a3e0", "#a9cf00", "#ffffff"]
+    html_parts: list[str] = []
+    for index, (label, value) in enumerate(summary_cards):
+        bg = accent_colors[index % len(accent_colors)]
+        text_color = "#ffffff" if bg in {"#e6007e", "#00a3e0"} else "#111827"
+        muted_color = "rgba(255,255,255,0.78)" if bg in {"#e6007e", "#00a3e0"} else "#475569"
+        border_color = "#111827" if index == 2 and pipeline_status == "success" else "#111827"
+        html_parts.append(
+            f"""
+            <td width="25%" style="padding:6px;vertical-align:top;">
+              <div style="background:{bg};border:1px solid {border_color};border-radius:18px;padding:16px 14px;min-height:86px;">
+                <div style="font-size:11px;line-height:1.3;color:{muted_color};font-weight:800;text-transform:uppercase;letter-spacing:0.08em;">{escape(str(label))}</div>
+                <div style="margin-top:8px;font-size:30px;line-height:1;font-weight:900;letter-spacing:-0.04em;color:{text_color};">{escape(str(value))}</div>
+              </div>
+            </td>
+            """
+        )
+
+    rows: list[str] = []
+    for i in range(0, len(html_parts), 4):
+        rows.append(f"<tr>{''.join(html_parts[i:i + 4])}</tr>")
+    return "".join(rows)
+
+
+def _render_html(
+    pipeline_run: dict[str, Any],
+    rows: list[dict[str, Any]],
+    totals: dict[str, int],
+    monitoring_url: str | None,
+    inline_logo_cid: str | None = None,
+) -> str:
     pipeline_status = _status_normalize(_safe_str(pipeline_run, "status"))
     pipeline_color = _status_color(pipeline_status)
     pipeline_label = _status_label(pipeline_status)
@@ -284,29 +385,23 @@ def _render_html(pipeline_run: dict[str, Any], rows: list[dict[str, Any]], total
         ("Archivées", totals["offers_archived"]),
     ]
 
-    cards_html = "".join(
-        f"""
-        <div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;min-width:132px;">
-          <div style="font-size:12px;color:#6b7280;margin-bottom:6px;">{escape(str(label))}</div>
-          <div style="font-size:24px;font-weight:700;color:#111827;">{escape(str(value))}</div>
-        </div>
-        """
-        for label, value in summary_cards
-    )
+    cards_html = _render_summary_cards(summary_cards, pipeline_status)
 
     rows_html = "".join(
         f"""
         <tr>
-          <td style="padding:10px 12px;border-bottom:1px solid #eef2f7;font-weight:600;color:#111827;">{escape(str(row['name']))}</td>
-          <td style="padding:10px 12px;border-bottom:1px solid #eef2f7;color:{row['status_color']};font-weight:600;">
-            <span>{escape(row['status_dot'])}</span> {escape(row['status_label'])}
+          <td style="padding:13px 14px;border-bottom:1px solid #ece7df;font-weight:800;color:#111827;vertical-align:top;">{escape(str(row['name']))}</td>
+          <td style="padding:13px 14px;border-bottom:1px solid #ece7df;vertical-align:top;">
+            <span style="display:inline-block;border:1px solid {row['status_color']};border-radius:999px;padding:4px 9px;color:{row['status_color']};font-size:12px;line-height:1;font-weight:900;white-space:nowrap;">
+              {escape(row['status_dot'])} {escape(row['status_label'])}
+            </span>
           </td>
-          <td style="padding:10px 12px;border-bottom:1px solid #eef2f7;text-align:right;">{row['offers_found']}</td>
-          <td style="padding:10px 12px;border-bottom:1px solid #eef2f7;text-align:right;">{row['offers_new']}</td>
-          <td style="padding:10px 12px;border-bottom:1px solid #eef2f7;text-align:right;">{row['offers_updated']}</td>
-          <td style="padding:10px 12px;border-bottom:1px solid #eef2f7;text-align:right;">{row['offers_archived']}</td>
-          <td style="padding:10px 12px;border-bottom:1px solid #eef2f7;text-align:right;">{row['active_count']}</td>
-          <td style="padding:10px 12px;border-bottom:1px solid #eef2f7;color:#4b5563;">{escape(row['message'])[:120]}</td>
+          <td style="padding:13px 10px;border-bottom:1px solid #ece7df;text-align:right;font-weight:800;color:#111827;vertical-align:top;">{row['offers_found']}</td>
+          <td style="padding:13px 10px;border-bottom:1px solid #ece7df;text-align:right;font-weight:800;color:#111827;vertical-align:top;">{row['offers_new']}</td>
+          <td style="padding:13px 10px;border-bottom:1px solid #ece7df;text-align:right;font-weight:800;color:#111827;vertical-align:top;">{row['offers_updated']}</td>
+          <td style="padding:13px 10px;border-bottom:1px solid #ece7df;text-align:right;font-weight:800;color:#111827;vertical-align:top;">{row['offers_archived']}</td>
+          <td style="padding:13px 10px;border-bottom:1px solid #ece7df;text-align:right;font-weight:800;color:#111827;vertical-align:top;">{row['active_count']}</td>
+          <td style="padding:13px 14px;border-bottom:1px solid #ece7df;color:#475569;vertical-align:top;line-height:1.45;">{escape(_truncate(row['message'], 120))}</td>
         </tr>
         """
         for row in rows
@@ -315,61 +410,131 @@ def _render_html(pipeline_run: dict[str, Any], rows: list[dict[str, Any]], total
     monitoring_block = ""
     if monitoring_url:
         monitoring_block = f"""
-        <a href="{escape(monitoring_url)}" style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:10px 14px;border-radius:10px;font-weight:600;">
+        <a href="{escape(monitoring_url)}" style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:13px 18px;border-radius:999px;font-size:13px;line-height:1;font-weight:900;border:1px solid #111827;">
           Ouvrir le monitoring
         </a>
         """
 
+    logo_block = _render_logo_block(inline_logo_cid)
+    preheader = f"Agent Emplois ITA — statut {pipeline_label}, {totals['offers_found']} offre(s) trouvée(s), {totals['offers_new']} nouvelle(s)."
+
     html_doc = f"""
     <!doctype html>
     <html lang="fr">
-    <body style="margin:0;padding:0;background:#f6f8fb;font-family:Arial,Helvetica,sans-serif;color:#111827;">
-      <div style="max-width:1200px;margin:0 auto;padding:24px 16px;">
-        <div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:16px;padding:24px;">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">
-            <div>
-              <div style="font-size:24px;font-weight:700;color:#111827;">Agent Emplois ITA — récap de run</div>
-              <div style="margin-top:8px;font-size:14px;color:#4b5563;">
-                Statut global :
-                <span style="color:{pipeline_color};font-weight:700;">{escape(_status_dot(pipeline_status))} {escape(pipeline_label)}</span>
-              </div>
-              <div style="margin-top:8px;font-size:13px;color:#6b7280;">
-                Déclenchement : {escape(trigger)} · Début : {_fmt_dt_fr(started_at)} · Fin : {_fmt_dt_fr(finished_at)}
-              </div>
-            </div>
-            <div>{monitoring_block}</div>
-          </div>
-        </div>
-
-        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:16px;">
-          {cards_html}
-        </div>
-
-        <div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:16px;padding:20px;margin-top:16px;">
-          <div style="font-size:18px;font-weight:700;color:#111827;margin-bottom:12px;">Détail par ITA</div>
-          <table style="width:100%;border-collapse:collapse;font-size:13px;">
-            <thead>
-              <tr style="background:#f9fafb;">
-                <th style="text-align:left;padding:10px 12px;border-bottom:1px solid #e5e7eb;">ITA</th>
-                <th style="text-align:left;padding:10px 12px;border-bottom:1px solid #e5e7eb;">Statut</th>
-                <th style="text-align:right;padding:10px 12px;border-bottom:1px solid #e5e7eb;">Trouvées</th>
-                <th style="text-align:right;padding:10px 12px;border-bottom:1px solid #e5e7eb;">Nouv.</th>
-                <th style="text-align:right;padding:10px 12px;border-bottom:1px solid #e5e7eb;">MAJ</th>
-                <th style="text-align:right;padding:10px 12px;border-bottom:1px solid #e5e7eb;">Archivées</th>
-                <th style="text-align:right;padding:10px 12px;border-bottom:1px solid #e5e7eb;">Actives</th>
-                <th style="text-align:left;padding:10px 12px;border-bottom:1px solid #e5e7eb;">Info</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows_html}
-            </tbody>
-          </table>
-        </div>
-
-        <div style="font-size:12px;color:#6b7280;margin-top:12px;text-align:center;">
-          Email généré automatiquement depuis le workflow GitHub Actions de l’agent.
-        </div>
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <meta name="color-scheme" content="light" />
+      <meta name="supported-color-schemes" content="light" />
+      <title>Agent Emplois ITA — récap de run</title>
+    </head>
+    <body style="margin:0;padding:0;background:#f6f3ee;font-family:Arial,Helvetica,sans-serif;color:#111827;-webkit-text-size-adjust:100%;text-size-adjust:100%;">
+      <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;line-height:1px;font-size:1px;">
+        {escape(preheader)}
       </div>
+
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#f6f3ee;border-collapse:collapse;">
+        <tr>
+          <td align="center" style="padding:24px 12px;">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:1080px;border-collapse:separate;border-spacing:0;">
+              <tr>
+                <td style="padding:0;">
+                  <div style="overflow:hidden;border:1px solid #111827;border-radius:28px;background:#ffffff;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;border-collapse:collapse;">
+                      <tr>
+                        <td style="padding:20px 22px;border-bottom:1px solid #111827;background:#ffffff;">
+                          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;border-collapse:collapse;">
+                            <tr>
+                              <td align="left" style="vertical-align:middle;">
+                                {logo_block}
+                              </td>
+                              <td align="right" style="vertical-align:middle;">
+                                <span style="display:inline-block;border:1px solid #111827;border-radius:999px;background:#f6f3ee;padding:8px 12px;font-size:11px;line-height:1;font-weight:900;letter-spacing:0.12em;text-transform:uppercase;color:#111827;white-space:nowrap;">
+                                  Récap quotidien
+                                </span>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+
+                      <tr>
+                        <td style="padding:0;">
+                          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;border-collapse:collapse;">
+                            <tr>
+                              <td style="width:35%;background:#ffcd00;padding:28px 22px;border-right:1px solid #111827;vertical-align:top;">
+                                <div style="font-size:12px;line-height:1;font-weight:900;letter-spacing:0.18em;text-transform:uppercase;color:#111827;">Statut global</div>
+                                <div style="margin-top:18px;font-size:38px;line-height:0.95;font-weight:900;letter-spacing:-0.06em;color:#111827;">{escape(pipeline_label)}</div>
+                                <div style="margin-top:14px;display:inline-block;border:1px solid {pipeline_color};border-radius:999px;background:#ffffff;padding:8px 11px;color:{pipeline_color};font-size:13px;line-height:1;font-weight:900;">
+                                  {escape(_status_dot(pipeline_status))} {escape(pipeline_label)}
+                                </div>
+                              </td>
+                              <td style="background:#ffffff;padding:28px 24px;vertical-align:top;">
+                                <h1 style="margin:0;font-size:34px;line-height:0.98;font-weight:900;letter-spacing:-0.06em;color:#000000;">Agent Emplois ITA</h1>
+                                <div style="margin-top:8px;font-size:18px;line-height:1.35;font-weight:800;color:#111827;">Récap de run</div>
+                                <div style="margin-top:16px;font-size:14px;line-height:1.7;color:#475569;">
+                                  <strong style="color:#111827;">Déclenchement :</strong> {escape(trigger)}<br />
+                                  <strong style="color:#111827;">Début :</strong> {_fmt_dt_fr(started_at)}<br />
+                                  <strong style="color:#111827;">Fin :</strong> {_fmt_dt_fr(finished_at)}
+                                </div>
+                                <div style="margin-top:18px;">{monitoring_block}</div>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+                  </div>
+                </td>
+              </tr>
+
+              <tr>
+                <td style="padding:16px 0 0 0;">
+                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;border-collapse:collapse;">
+                    {cards_html}
+                  </table>
+                </td>
+              </tr>
+
+              <tr>
+                <td style="padding:16px 0 0 0;">
+                  <div style="border:1px solid #111827;border-radius:24px;background:#ffffff;overflow:hidden;">
+                    <div style="padding:20px 22px;border-bottom:1px solid #111827;background:#ffffff;">
+                      <div style="font-size:22px;line-height:1;font-weight:900;letter-spacing:-0.04em;color:#000000;">Détail par ITA</div>
+                      <div style="margin-top:6px;font-size:13px;line-height:1.5;color:#64748b;">Même contenu que le récap précédent, avec une mise en forme plus lisible.</div>
+                    </div>
+                    <div style="overflow-x:auto;">
+                      <table role="table" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;min-width:860px;border-collapse:collapse;font-size:13px;line-height:1.35;">
+                        <thead>
+                          <tr style="background:#f6f3ee;">
+                            <th style="text-align:left;padding:12px 14px;border-bottom:1px solid #111827;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#475569;">ITA</th>
+                            <th style="text-align:left;padding:12px 14px;border-bottom:1px solid #111827;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#475569;">Statut</th>
+                            <th style="text-align:right;padding:12px 10px;border-bottom:1px solid #111827;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#475569;">Trouvées</th>
+                            <th style="text-align:right;padding:12px 10px;border-bottom:1px solid #111827;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#475569;">Nouv.</th>
+                            <th style="text-align:right;padding:12px 10px;border-bottom:1px solid #111827;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#475569;">MAJ</th>
+                            <th style="text-align:right;padding:12px 10px;border-bottom:1px solid #111827;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#475569;">Archivées</th>
+                            <th style="text-align:right;padding:12px 10px;border-bottom:1px solid #111827;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#475569;">Actives</th>
+                            <th style="text-align:left;padding:12px 14px;border-bottom:1px solid #111827;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#475569;">Info</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows_html}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+
+              <tr>
+                <td align="center" style="padding:16px 8px 0 8px;font-size:12px;line-height:1.5;color:#64748b;">
+                  Email généré automatiquement depuis le workflow GitHub Actions de l’agent.
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
     </body>
     </html>
     """
@@ -409,13 +574,33 @@ def _render_text(pipeline_run: dict[str, Any], rows: list[dict[str, Any]], total
     return "\n".join(lines)
 
 
-def _send_email(settings: MailSettings, subject: str, html_body: str, text_body: str) -> None:
+def _send_email(
+    settings: MailSettings,
+    subject: str,
+    html_body: str,
+    text_body: str,
+    logo_path: Path | None = None,
+    logo_cid: str = "acta-logo",
+) -> None:
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = settings.mail_from
     msg["To"] = ", ".join(settings.mail_to)
     msg.set_content(text_body)
     msg.add_alternative(html_body, subtype="html")
+
+    if logo_path and logo_path.is_file():
+        try:
+            html_part = msg.get_payload()[-1]
+            html_part.add_related(
+                logo_path.read_bytes(),
+                maintype="image",
+                subtype=_logo_subtype(logo_path),
+                cid=f"<{logo_cid}>",
+                filename=logo_path.name,
+            )
+        except Exception as exc:
+            print(f"Logo Acta non intégré à l'email : {exc}")
 
     if settings.smtp_use_ssl:
         with smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=30) as smtp:
@@ -467,10 +652,18 @@ def main() -> int:
     finished_at = _fmt_dt_fr(_safe_str(pipeline_run, "finished_at", "updated_at"))
     subject = f"{subject_icon} {settings.subject_prefix} — run {finished_at}"
 
-    html_body = _render_html(pipeline_run, rows, totals, settings.monitoring_url)
+    logo_path = _find_logo_path()
+    logo_cid = "acta-logo"
+    html_body = _render_html(
+        pipeline_run,
+        rows,
+        totals,
+        settings.monitoring_url,
+        inline_logo_cid=logo_cid if logo_path else None,
+    )
     text_body = _render_text(pipeline_run, rows, totals, settings.monitoring_url)
 
-    _send_email(settings, subject, html_body, text_body)
+    _send_email(settings, subject, html_body, text_body, logo_path=logo_path, logo_cid=logo_cid)
     print(f"Email de synthèse envoyé à {', '.join(settings.mail_to)}")
     return 0
 
