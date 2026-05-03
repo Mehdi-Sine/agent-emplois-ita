@@ -6,10 +6,24 @@
   color-scheme: light;
 }
 
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
 body {
-  @apply bg-slate-50 text-slate-900 antialiased;
+  @apply min-h-screen bg-[#f6f3ee] text-slate-950 antialiased;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
 
 a {
-  @apply transition;
+  @apply transition-colors duration-200;
+}
+
+::selection {
+  background: #ffe066;
+  color: #111827;
 }

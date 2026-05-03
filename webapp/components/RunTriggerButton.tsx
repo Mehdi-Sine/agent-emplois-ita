@@ -46,34 +46,22 @@ export default function RunTriggerButton({
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+    <div className="flex flex-col gap-2">
       <button
         type="button"
         onClick={handleClick}
         disabled={isPending}
-        style={{
-          appearance: "none",
-          border: "1px solid #b8c4d6",
-          background: isPending ? "#eef2f7" : "#ffffff",
-          color: "#0a214a",
-          borderRadius: 10,
-          padding: compact ? "8px 12px" : "10px 14px",
-          fontSize: compact ? 14 : 15,
-          fontWeight: 600,
-          cursor: isPending ? "not-allowed" : "pointer",
-          width: compact ? "100%" : "fit-content",
-        }}
+        className={[
+          "inline-flex items-center justify-center rounded-full border border-black px-4 font-black transition",
+          compact ? "w-full py-2 text-xs" : "py-3 text-sm",
+          isPending ? "cursor-not-allowed bg-slate-100 text-slate-400" : "bg-white text-black hover:bg-black hover:text-white",
+        ].join(" ")}
       >
         {isPending ? "Envoi..." : label}
       </button>
 
       {message ? (
-        <span
-          style={{
-            fontSize: 12,
-            color: message === "Run déclenché." ? "#0a7d57" : "#b42318",
-          }}
-        >
+        <span className={message === "Run déclenché." ? "text-xs font-bold text-emerald-700" : "text-xs font-bold text-rose-700"}>
           {message}
         </span>
       ) : null}
