@@ -31,26 +31,28 @@ class CevaConnector(BaseConnector):
         if not title:
             return None
 
-        contract_type = self._infer_contract_type(title)
         description_text = self._extract_description(lines, title)
+        contract_type = self._infer_contract_type(" ".join(filter(None, [title, description_text])))
         offer_type = self._infer_offer_type(title, contract_type, description_text)
+        location_text, city, region = self._infer_location(title, description_text)
+        is_filled = self._is_filled(title, description_text)
 
         return {
             "source_url": url,
             "application_url": "mailto:algue@ceva.fr",
             "title": title,
             "description_text": description_text,
-            "location_text": "Pleubian (22610)",
-            "city": "Pleubian",
-            "region": "Bretagne",
+            "location_text": location_text,
+            "city": city,
+            "region": region,
             "country": "France",
             "contract_type": contract_type,
             "offer_type": offer_type,
             "remote_mode": None,
             "posted_at": None,
             "raw_posted_at": None,
-            "is_filled": False,
-            "listing_status": "open",
+            "is_filled": is_filled,
+            "listing_status": "filled" if is_filled else "open",
         }
 
     def normalize_offer(self, raw_item: dict[str, object]) -> NormalizedOffer:
@@ -60,14 +62,14 @@ class CevaConnector(BaseConnector):
 
         return NormalizedOffer(
             source_slug=self.source.slug,
-            source_offer_key=stable_offer_key(source_url, None, None),
+            source_offer_key=stable_offer_key(source_url, str(title), str(location) if location else None),
             source_url=source_url,
             application_url=str(raw_item.get("application_url") or source_url),
             title=str(title),
             organization=self.source.name,
             location_text=str(location) if location else None,
-            city="Pleubian",
-            region="Bretagne",
+            city=str(raw_item.get("city")) if raw_item.get("city") else None,
+            region=str(raw_item.get("region")) if raw_item.get("region") else None,
             country="France",
             contract_type=str(raw_item.get("contract_type")) if raw_item.get("contract_type") else None,
             offer_type=str(raw_item.get("offer_type")) if raw_item.get("offer_type") else None,
@@ -80,6 +82,7 @@ class CevaConnector(BaseConnector):
                 str(location),
                 str(raw_item.get("contract_type")),
                 str(raw_item.get("offer_type")),
+                str(raw_item.get("listing_status")),
             ]),
             raw_payload=raw_item,
         )
@@ -142,3 +145,25 @@ class CevaConnector(BaseConnector):
         if "stage" in low:
             return "stage"
         return "emploi"
+
+    def _infer_location(self, title: str | None, description_text: str | None) -> tuple[str | None, str | None, str | None]:
+        text = "\n".join(filter(None, [title, description_text]))
+        match = re.search(r"(?:bas[ée] à|poste est bas[ée] à)\s+([A-Za-zÀ-ÿ\- ]+)\s*\((\d{2})\)", text, flags=re.IGNORECASE)
+        if not match:
+            match = re.search(r"\b(\d{5})\s+([A-Za-zÀ-ÿ\- ]{2,})\b", text)
+            if match:
+                postal, city = match.group(1), normalize_spaces(match.group(2))
+                dept = postal[:2]
+                return f"{city} ({postal})", city, self._region_from_dept(dept)
+            return "Pleubian (22610)", "Pleubian", "Bretagne"
+        city = normalize_spaces(match.group(1))
+        dept = match.group(2)
+        return f"{city} ({dept})", city, self._region_from_dept(dept)
+
+    def _region_from_dept(self, dept: str | None) -> str | None:
+        mapping = {"22": "Bretagne", "29": "Bretagne", "35": "Bretagne", "56": "Bretagne", "75": "Île-de-France", "77": "Île-de-France", "78": "Île-de-France", "91": "Île-de-France", "92": "Île-de-France", "93": "Île-de-France", "94": "Île-de-France", "95": "Île-de-France"}
+        return mapping.get(dept or "")
+
+    def _is_filled(self, title: str | None, description_text: str | None) -> bool:
+        text = " ".join(filter(None, [title, description_text])).lower()
+        return any(marker in text for marker in ["poste pourvu", "offre close", "recrutement clos", "candidatures closes"])
