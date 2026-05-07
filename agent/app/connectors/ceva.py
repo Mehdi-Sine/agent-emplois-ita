@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from io import BytesIO
 
 from httpx import Client
 
@@ -154,10 +155,28 @@ class CevaConnector(BaseConnector):
             return "\n\n".join(lines).strip() or None
 
         if "pdf" in content_type or application_url.lower().endswith(".pdf"):
-            return None
+            return self._extract_pdf_text(response.content)
 
         text = response.text.strip()
         return text or None
+
+
+    def _extract_pdf_text(self, content: bytes) -> str | None:
+        if not content:
+            return None
+        try:
+            from pypdf import PdfReader
+
+            reader = PdfReader(BytesIO(content))
+            pages: list[str] = []
+            for page in reader.pages:
+                text = normalize_spaces(page.extract_text() or "")
+                if text:
+                    pages.append(text)
+            joined = "\n\n".join(pages).strip()
+            return joined or None
+        except Exception:
+            return None
 
     def _infer_contract_type(self, text: str | None) -> str | None:
         if not text:
