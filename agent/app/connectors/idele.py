@@ -503,12 +503,24 @@ class IdeleConnector(BaseConnector):
         return "emploi"
 
     def _is_filled(self, lines: list[str]) -> bool:
-        blob = "\n".join(lines).lower()
-        return (
-            "offre terminée" in blob
-            or "offre terminee" in blob
-            or "cette offre n'est plus disponible" in blob
-        )
+        normalized = [normalize_spaces(line).lower() for line in lines if normalize_spaces(line)]
+
+        strict_markers = {
+            "cette offre n'est plus disponible",
+            "cette offre n’est plus disponible",
+            "poste pourvu",
+            "recrutement clos",
+            "offre clôturée",
+            "offre cloturee",
+        }
+
+        for line in normalized:
+            if line in strict_markers:
+                return True
+            if line.startswith("cette offre n'est plus disponible") or line.startswith("cette offre n’est plus disponible"):
+                return True
+
+        return False
 
     def _node_text(self, tree, selectors: list[str]) -> str | None:
         for selector in selectors:
