@@ -6,7 +6,7 @@ from datetime import datetime
 from httpx import Client
 
 from app.connectors.base import BaseConnector
-from app.connectors.common import content_hash, html_tree, normalize_spaces, stable_offer_key
+from app.connectors.common import absolute_url, content_hash, html_tree, normalize_spaces, stable_offer_key
 from app.models import NormalizedOffer
 
 
@@ -31,7 +31,10 @@ class CevaConnector(BaseConnector):
         if not title:
             return None
 
-        description_text = self._extract_description(lines, title)
+        application_url = self._extract_application_url(tree, str(response.url), title)
+        page_description = self._extract_description(lines, title)
+        doc_description = self._fetch_offer_document_text(client, application_url)
+        description_text = doc_description or page_description
         contract_type = self._infer_contract_type(" ".join(filter(None, [title, description_text])))
         offer_type = self._infer_offer_type(title, contract_type, description_text)
         location_text, city, region = self._infer_location(title, description_text)
@@ -39,7 +42,7 @@ class CevaConnector(BaseConnector):
 
         return {
             "source_url": url,
-            "application_url": "mailto:algue@ceva.fr",
+            "application_url": application_url or "mailto:algue@ceva.fr",
             "title": title,
             "description_text": description_text,
             "location_text": location_text,
@@ -62,7 +65,7 @@ class CevaConnector(BaseConnector):
 
         return NormalizedOffer(
             source_slug=self.source.slug,
-            source_offer_key=stable_offer_key(source_url, str(title), str(location) if location else None),
+            source_offer_key=stable_offer_key(source_url, None, None),
             source_url=source_url,
             application_url=str(raw_item.get("application_url") or source_url),
             title=str(title),
@@ -115,6 +118,45 @@ class CevaConnector(BaseConnector):
                 continue
             kept.append(line)
         text = "\n\n".join(kept).strip()
+        return text or None
+
+
+    def _extract_application_url(self, tree, page_url: str, title: str) -> str | None:
+        title_low = title.lower()
+        for node in tree.css("a[href]"):
+            href = node.attributes.get("href")
+            text = normalize_spaces(node.text(separator=" ", strip=True)) or ""
+            text_low = text.lower()
+            if not href:
+                continue
+            is_doc = any(marker in href.lower() for marker in [".pdf", ".doc", ".docx"])
+            if is_doc and (text_low in title_low or title_low in text_low or "offre" in text_low):
+                return absolute_url(page_url, href)
+        for node in tree.css("a[href]"):
+            href = node.attributes.get("href")
+            if href and any(marker in href.lower() for marker in [".pdf", ".doc", ".docx"]):
+                return absolute_url(page_url, href)
+        return None
+
+    def _fetch_offer_document_text(self, client: Client, application_url: str | None) -> str | None:
+        if not application_url:
+            return None
+        try:
+            response = client.get(application_url)
+            response.raise_for_status()
+        except Exception:
+            return None
+
+        content_type = (response.headers.get("content-type") or "").lower()
+        if "html" in content_type:
+            tree = html_tree(response.text)
+            lines = self._extract_lines(tree)
+            return "\n\n".join(lines).strip() or None
+
+        if "pdf" in content_type or application_url.lower().endswith(".pdf"):
+            return None
+
+        text = response.text.strip()
         return text or None
 
     def _infer_contract_type(self, text: str | None) -> str | None:
