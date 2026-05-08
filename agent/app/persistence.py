@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from supabase import Client, create_client
@@ -65,7 +66,7 @@ class SupabaseRepository:
     def create_pipeline_run(self, trigger_type: str, total_sources: int) -> dict[str, Any]:
         payload = {
             "trigger_type": trigger_type,
-            "started_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": datetime.now(ZoneInfo("Europe/Paris")).isoformat(),
             "status": "SUCCESS",
             "total_sources": total_sources,
             "sources_success": 0,
@@ -92,7 +93,7 @@ class SupabaseRepository:
         self.client.table("pipeline_runs").update(
             {
                 "status": status,
-                "ended_at": datetime.now(timezone.utc).isoformat(),
+                "ended_at": datetime.now(ZoneInfo("Europe/Paris")).isoformat(),
                 "sources_success": sources_success,
                 "sources_failed": sources_failed,
                 "new_offers": new_offers,
@@ -106,7 +107,7 @@ class SupabaseRepository:
         payload = {
             "pipeline_run_id": pipeline_run_id,
             "source_id": source_id,
-            "started_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": datetime.now(ZoneInfo("Europe/Paris")).isoformat(),
             "status": "FAILED",
             "offers_found": 0,
             "offers_new": 0,
@@ -187,7 +188,7 @@ class SupabaseRepository:
             )
             existing_row = existing.data[0] if existing.data else None
 
-            now_iso = datetime.now(timezone.utc).isoformat()
+            now_iso = datetime.now(ZoneInfo("Europe/Paris")).isoformat()
             raw_payload = json_safe(offer.raw_payload or {})
             listed_inactive = is_offer_listed_inactive(raw_payload)
 
@@ -259,7 +260,7 @@ class SupabaseRepository:
             ).execute()
 
         missing_rows = [row for row in active_rows if row["source_offer_key"] not in current_keys]
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = datetime.now(ZoneInfo("Europe/Paris")).isoformat()
 
         for row in missing_rows:
             new_missed_count = int(row.get("consecutive_missed_runs") or 0) + 1

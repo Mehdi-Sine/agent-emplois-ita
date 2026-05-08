@@ -175,6 +175,8 @@ class IfipConnector(BaseConnector):
             "posted_at": posted_at,
             "education_level": education_level,
             "raw_posted_at": seed.get("posted_raw"),
+            "is_filled": False,
+            "listing_status": "open",
         }
 
     def normalize_offer(self, raw_item: dict[str, Any]) -> NormalizedOffer:
