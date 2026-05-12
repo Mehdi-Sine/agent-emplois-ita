@@ -50,12 +50,10 @@ def run_collection(selected_sources: list[str] | None = None, skip_paris_guard: 
 
     settings = Settings.from_env()
     source_rows = [SourceConfig(**row) for row in load_sources_config()]
+    source_rows = [source for source in source_rows if source.slug in CONNECTOR_REGISTRY]
     if selected_sources:
         selected_set = set(selected_sources)
         source_rows = [source for source in source_rows if source.slug in selected_set]
-    else:
-        source_rows = [source for source in source_rows if source.enabled]
-    source_rows = [source for source in source_rows if source.slug in CONNECTOR_REGISTRY]
 
     if not source_rows:
         logger.info("Aucune source sélectionnée.")
