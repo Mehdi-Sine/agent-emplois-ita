@@ -20,6 +20,14 @@ from app.models import NormalizedOffer
 
 
 class TerresInoviaConnector(BaseConnector):
+
+    BROWSER_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
     JOB_PATH_RE = re.compile(r"/fr/institut/carrieres/[^/?#]+/?$")
     PUBLISHED_RE = re.compile(r"Publié le\s+([0-9]{1,2}\s+[^\|\n]+?\s+[0-9]{4})", re.IGNORECASE)
 
@@ -46,7 +54,7 @@ class TerresInoviaConnector(BaseConnector):
         self._listing_index: dict[str, dict[str, Any]] = {}
 
     def discover_offer_urls(self, client: Client) -> list[str]:
-        response = client.get(str(self.source.jobs_url))
+        response = self._get_with_fallback(client, str(self.source.jobs_url))
         response.raise_for_status()
         tree = html_tree(response.text)
 
@@ -136,7 +144,7 @@ class TerresInoviaConnector(BaseConnector):
 
         detail_text = ""
         try:
-            response = client.get(url)
+            response = self._get_with_fallback(client, url)
             response.raise_for_status()
             tree = html_tree(response.text)
 
@@ -356,3 +364,15 @@ class TerresInoviaConnector(BaseConnector):
         if "stage" in blob:
             return "stage"
         return "emploi"
+
+    def _get_with_fallback(self, client: Client, url: str):
+        response = client.get(url)
+        if response.status_code != 403:
+            response.raise_for_status()
+            return response
+
+        retry_headers = dict(self.BROWSER_HEADERS)
+        retry_headers["Referer"] = str(self.source.site_url)
+        response = client.get(url, headers=retry_headers)
+        response.raise_for_status()
+        return response
