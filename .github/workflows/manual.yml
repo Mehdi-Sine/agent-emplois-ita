@@ -70,7 +70,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           SUMMARY_EMAIL_ENABLED: ${{ vars.SUMMARY_EMAIL_ENABLED }}
-          SUMMARY_EMAIL_TO: ${{ vars.SUMMARY_EMAIL_TO }}
+          SUMMARY_EMAIL_TO: ${{ vars.SUMMARY_EMAIL_TO || 'rejoignez-nous@acta.asso.fr' }}
           SUMMARY_EMAIL_FROM: ${{ vars.SUMMARY_EMAIL_FROM }}
           SUMMARY_EMAIL_SUBJECT_PREFIX: ${{ vars.SUMMARY_EMAIL_SUBJECT_PREFIX }}
           APP_MONITORING_URL: ${{ vars.APP_MONITORING_URL }}

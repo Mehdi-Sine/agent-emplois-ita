@@ -27,6 +27,10 @@ class TerresInoviaConnector(BaseConnector):
         "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Upgrade-Insecure-Requests": "1",
     }
     JOB_PATH_RE = re.compile(r"/fr/institut/carrieres/[^/?#]+/?$")
     PUBLISHED_RE = re.compile(r"Publié le\s+([0-9]{1,2}\s+[^\|\n]+?\s+[0-9]{4})", re.IGNORECASE)
@@ -373,6 +377,15 @@ class TerresInoviaConnector(BaseConnector):
 
         retry_headers = dict(self.BROWSER_HEADERS)
         retry_headers["Referer"] = str(self.source.site_url)
+
+        # Retry #1: browser-like headers
         response = client.get(url, headers=retry_headers)
+        if response.status_code != 403:
+            response.raise_for_status()
+            return response
+
+        # Retry #2: same endpoint with trailing slash (Drupal/WAF variance)
+        slash_url = url if url.endswith("/") else f"{url}/"
+        response = client.get(slash_url, headers=retry_headers)
         response.raise_for_status()
         return response
