@@ -23,7 +23,7 @@ def should_run_now(skip_guard: bool) -> bool:
     if skip_guard:
         return True
     now_paris = datetime.now(ZoneInfo("Europe/Paris"))
-    return now_paris.minute == 1 and now_paris.hour in {0, 12}
+    return now_paris.minute == 1 and now_paris.hour == 0
 
 
 def write_json(path: Path, payload: object) -> None:
@@ -50,18 +50,16 @@ def run_collection(selected_sources: list[str] | None = None, skip_paris_guard: 
 
     settings = Settings.from_env()
     source_rows = [SourceConfig(**row) for row in load_sources_config()]
+    source_rows = [source for source in source_rows if source.slug in CONNECTOR_REGISTRY]
     if selected_sources:
         selected_set = set(selected_sources)
         source_rows = [source for source in source_rows if source.slug in selected_set]
-    else:
-        source_rows = [source for source in source_rows if source.enabled]
-    source_rows = [source for source in source_rows if source.slug in CONNECTOR_REGISTRY]
 
     if not source_rows:
         logger.info("Aucune source sélectionnée.")
         return 0
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(ZoneInfo("Europe/Paris")).strftime("%Y%m%d_%H%M%S")
     run_dir = RUNS_DIR / timestamp
     run_dir.mkdir(parents=True, exist_ok=True)
 

@@ -258,6 +258,8 @@ class IteipmaiConnector(BaseConnector):
             return False
         if re.search(r"\.(pdf|jpg|jpeg|png|svg|webp|doc|docx|xls|xlsx)$", path, flags=re.IGNORECASE):
             return False
+        if not path.startswith("/actualite/"):
+            return False
 
         return True
 
@@ -305,7 +307,9 @@ class IteipmaiConnector(BaseConnector):
 
     def _extract_is_filled(self, paragraphs: list[str], title: str | None) -> bool:
         blob = " ".join([title or "", *paragraphs]).lower()
-        return "annonce pourvue" in blob or "annonces pourvues" in blob
+        if "a pourvoir" in blob or "à pourvoir" in blob:
+            return False
+        return "annonce pourvue" in blob
 
     def _extract_listing_location(self, paragraphs: list[str]) -> str | None:
         fragments: list[str] = []
@@ -370,7 +374,7 @@ class IteipmaiConnector(BaseConnector):
 
     def _is_status_line(self, value: str) -> bool:
         lower = value.lower()
-        return "annonce pourvue" in lower or "annonces pourvues" in lower
+        return "annonce pourvue" in lower
 
     def _is_contract_line(self, value: str) -> bool:
         lower = normalize_spaces(value).lower()

@@ -2,8 +2,7 @@ name: ita-jobs-daily
 
 on:
   schedule:
-    - cron: "1 0 * * *"
-      timezone: "Europe/Paris"
+    - cron: "1 * * * *"
   workflow_dispatch:
 
 concurrency:
@@ -37,7 +36,13 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           JOBS_ARCHIVE_MISSED_THRESHOLD: "2"
           USER_AGENT: "ITA Jobs Bot/1.0 (+GitHub Actions)"
-        run: python -m app.main_collect_daily
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual dispatch on daily workflow: bypass Paris guard"
+            python -m app.main_collect_daily --skip-paris-guard
+          else
+            python -m app.main_collect_daily
+          fi
 
       - name: Upload run artifacts
         uses: actions/upload-artifact@v4
