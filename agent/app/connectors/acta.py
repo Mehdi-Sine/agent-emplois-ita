@@ -18,6 +18,14 @@ from app.models import NormalizedOffer
 
 
 class ActaConnector(BaseConnector):
+
+    BROWSER_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
     JOB_URL_RE = re.compile(
         r"^https://www\.welcometothejungle\.com/fr/companies/acta/jobs/[^/?#]+/?$",
         re.IGNORECASE,
@@ -49,7 +57,7 @@ class ActaConnector(BaseConnector):
         self._listing_by_url: dict[str, dict[str, object]] = {}
 
     def discover_offer_urls(self, client: Client) -> list[str]:
-        response = client.get(str(self.source.jobs_url))
+        response = self._get_with_fallback(client, str(self.source.jobs_url))
         response.raise_for_status()
         tree = html_tree(response.text)
 
@@ -111,7 +119,7 @@ class ActaConnector(BaseConnector):
             self.discover_offer_urls(client)
         listing = self._listing_by_url.get(url, {})
 
-        response = client.get(url)
+        response = self._get_with_fallback(client, url)
         response.raise_for_status()
         tree = html_tree(response.text)
 
@@ -473,3 +481,16 @@ class ActaConnector(BaseConnector):
             return None
         text = normalize_spaces(str(value))
         return text or None
+
+
+    def _get_with_fallback(self, client: Client, url: str):
+        response = client.get(url)
+        if response.status_code != 403:
+            response.raise_for_status()
+            return response
+
+        retry_headers = dict(self.BROWSER_HEADERS)
+        retry_headers["Referer"] = str(self.source.site_url)
+        response = client.get(url, headers=retry_headers)
+        response.raise_for_status()
+        return response

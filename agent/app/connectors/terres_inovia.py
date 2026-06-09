@@ -20,6 +20,19 @@ from app.models import NormalizedOffer
 
 
 class TerresInoviaConnector(BaseConnector):
+    READER_URL_PREFIX = "https://r.jina.ai/http://r.jina.ai/http://"
+
+    BROWSER_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Upgrade-Insecure-Requests": "1",
+    }
     JOB_PATH_RE = re.compile(r"/fr/institut/carrieres/[^/?#]+/?$")
     PUBLISHED_RE = re.compile(r"Publié le\s+([0-9]{1,2}\s+[^\|\n]+?\s+[0-9]{4})", re.IGNORECASE)
 
@@ -46,7 +59,7 @@ class TerresInoviaConnector(BaseConnector):
         self._listing_index: dict[str, dict[str, Any]] = {}
 
     def discover_offer_urls(self, client: Client) -> list[str]:
-        response = client.get(str(self.source.jobs_url))
+        response = self._get_with_fallback(client, str(self.source.jobs_url))
         response.raise_for_status()
         tree = html_tree(response.text)
 
@@ -120,6 +133,9 @@ class TerresInoviaConnector(BaseConnector):
             seen.add(url)
             offer_urls.append(url)
 
+        if not offer_urls:
+            offer_urls, listing_index = self._discover_offer_urls_from_text(str(response.url), response.text)
+
         self._listing_index = listing_index
         return offer_urls
 
@@ -136,7 +152,7 @@ class TerresInoviaConnector(BaseConnector):
 
         detail_text = ""
         try:
-            response = client.get(url)
+            response = self._get_with_fallback(client, url)
             response.raise_for_status()
             tree = html_tree(response.text)
 
@@ -356,3 +372,135 @@ class TerresInoviaConnector(BaseConnector):
         if "stage" in blob:
             return "stage"
         return "emploi"
+
+    def _discover_offer_urls_from_text(self, base_url: str, text: str) -> tuple[list[str], dict[str, dict[str, Any]]]:
+        lines = [normalize_spaces(line) for line in text.splitlines()]
+        lines = [line for line in lines if line]
+
+        offer_urls: list[str] = []
+        listing_index: dict[str, dict[str, Any]] = {}
+        seen: set[str] = set()
+
+        for idx, line in enumerate(lines):
+            parsed = self._extract_markdown_offer_link(line, base_url)
+            if not parsed:
+                continue
+
+            title, url = parsed
+            if not self.JOB_PATH_RE.search(url) or url in seen:
+                continue
+
+            window = lines[max(0, idx - 3) : min(len(lines), idx + 8)]
+            posted_at_raw = self._extract_text_posted_at(window)
+            location_text = self._extract_text_location(title, window)
+            teaser = self._extract_text_teaser(lines[idx + 1 : idx + 6])
+            tags = self._extract_text_tags(title, window)
+
+            listing_index[url] = {
+                "source_url": url,
+                "application_url": url,
+                "title": title,
+                "description_text": teaser,
+                "location_text": location_text,
+                "posted_at": parse_date_guess(posted_at_raw),
+                "posted_at_raw": posted_at_raw,
+                "tag_values": tags,
+                "extra_meta": [],
+            }
+            seen.add(url)
+            offer_urls.append(url)
+
+        return offer_urls, listing_index
+
+    def _extract_markdown_offer_link(self, line: str, base_url: str) -> tuple[str, str] | None:
+        match = re.match(r"^#+\s*\[(?P<title>[^\]]+)\]\((?P<href>[^)]+)\)", line)
+        if not match:
+            match = re.match(r"^\*?\s*\[(?P<title>[^\]]+)\]\((?P<href>[^)]+)\)", line)
+        if not match:
+            return None
+
+        title = normalize_spaces(match.group("title"))
+        href = match.group("href")
+        url = absolute_url(str(self.source.site_url), href) if href.startswith("/") else absolute_url(base_url, href)
+        if not title or not url:
+            return None
+        return title, url
+
+    def _extract_text_posted_at(self, lines: list[str]) -> str | None:
+        for line in lines:
+            match = re.search(r"\b\d{1,2}\s+[A-Za-zÀ-ÖØ-öø-ÿ]+\s+\d{4}\b", line)
+            if match:
+                return match.group(0)
+        return None
+
+    def _extract_text_location(self, title: str, lines: list[str]) -> str | None:
+        title_location = self._extract_location_from_title(title)
+        if title_location:
+            return title_location
+
+        for line in reversed(lines):
+            if re.search(r"\b(CDI|CDD|Stage|apprentissage|mois)\b", line, re.IGNORECASE):
+                continue
+            if re.search(r"[A-Za-zÀ-ÖØ-öø-ÿ]", line) and len(line) <= 80:
+                return line
+        return None
+
+    def _extract_text_teaser(self, lines: list[str]) -> str | None:
+        kept: list[str] = []
+        for line in lines:
+            if line.startswith("###") or re.search(r"\b\d{1,2}\s+[A-Za-zÀ-ÖØ-öø-ÿ]+\s+\d{4}\b", line):
+                break
+            if re.fullmatch(r"(CDI|CDD|Stage|apprentissage|\d+\s+mois)", line, flags=re.IGNORECASE):
+                continue
+            kept.append(line)
+        return normalize_spaces(" ".join(kept))
+
+    def _extract_text_tags(self, title: str, lines: list[str]) -> list[str]:
+        tags: list[str] = []
+        blob = " ".join([title, *lines])
+        for tag in ["CDI", "CDD", "Stage", "apprentissage"]:
+            if tag.lower() in blob.lower():
+                tags.append(tag)
+        return tags
+
+    def _reader_url(self, url: str) -> str:
+        return f"{self.READER_URL_PREFIX}{url}"
+
+    def _get_with_fallback(self, client: Client, url: str):
+        retry_headers = dict(self.BROWSER_HEADERS)
+        retry_headers["Referer"] = str(self.source.site_url)
+
+        urls = [url]
+        slash_url = url if url.endswith("/") else f"{url}/"
+        no_slash_url = url.rstrip("/")
+        for candidate in [no_slash_url, slash_url]:
+            if candidate not in urls:
+                urls.append(candidate)
+
+        last_response = None
+        last_exc: Exception | None = None
+        for candidate_url in urls:
+            for kwargs in [{}, {"headers": retry_headers}]:
+                try:
+                    response = client.get(candidate_url, **kwargs)
+                    last_response = response
+                    if response.status_code != 403:
+                        response.raise_for_status()
+                        return response
+                except Exception as exc:
+                    last_exc = exc
+
+        # Last-resort read-through fallback: keeps Terres Inovia from failing the
+        # whole source run when the origin WAF blocks GitHub Actions IPs.
+        try:
+            reader_response = client.get(self._reader_url(no_slash_url), headers=retry_headers, timeout=45)
+            reader_response.raise_for_status()
+            return reader_response
+        except Exception as exc:
+            last_exc = exc
+
+        if last_response is not None:
+            last_response.raise_for_status()
+        if last_exc:
+            raise last_exc
+        raise RuntimeError(f"Impossible de récupérer {url}")

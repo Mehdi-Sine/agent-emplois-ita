@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       sources:
-        description: "Liste de slugs séparés par des virgules, ex: arvalis,idele"
+        description: "Liste de slugs séparés par des virgules, ex: arvalis,idele,terres_inovia"
         required: false
         default: ""
 
@@ -42,15 +42,16 @@ jobs:
           if [ -z "$SOURCES" ]; then
             python -m app.main_collect_daily --skip-paris-guard
           else
-            ARGS=""
+            ARGS=()
             IFS=',' read -ra ITEMS <<< "$SOURCES"
             for item in "${ITEMS[@]}"; do
               trimmed=$(echo "$item" | xargs)
-              if [ -n "$trimmed" ]; then
-                ARGS="$ARGS --source $trimmed"
+              slug=$(echo "$trimmed" | tr '[:upper:]' '[:lower:]' | tr ' -' '__')
+              if [ -n "$slug" ]; then
+                ARGS+=(--source "$slug")
               fi
             done
-            python -m app.main_collect_daily --skip-paris-guard $ARGS
+            python -m app.main_collect_daily --skip-paris-guard "${ARGS[@]}"
           fi
 
       - name: Upload run artifacts
@@ -70,7 +71,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           SUMMARY_EMAIL_ENABLED: ${{ vars.SUMMARY_EMAIL_ENABLED }}
-          SUMMARY_EMAIL_TO: ${{ vars.SUMMARY_EMAIL_TO }}
+          SUMMARY_EMAIL_TO: ${{ vars.SUMMARY_EMAIL_TO || 'rejoignez-nous@acta.asso.fr' }}
           SUMMARY_EMAIL_FROM: ${{ vars.SUMMARY_EMAIL_FROM }}
           SUMMARY_EMAIL_SUBJECT_PREFIX: ${{ vars.SUMMARY_EMAIL_SUBJECT_PREFIX }}
           APP_MONITORING_URL: ${{ vars.APP_MONITORING_URL }}
