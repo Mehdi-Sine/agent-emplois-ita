@@ -19,6 +19,14 @@ from app.models import NormalizedOffer
 
 class ItaviConnector(BaseConnector):
     FLATCHR_COMPANY_FALLBACK_URL = "https://careers.flatchr.io/fr/company/itavi/"
+    REQUEST_TIMEOUT_SECONDS = 45
+    BROWSER_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
 
     COMPANY_SLUG_RE = re.compile(
         r"https://careers\.flatchr\.io(?:/fr)?/company/(?P<slug>[^/?#]+)/?",
@@ -86,15 +94,20 @@ class ItaviConnector(BaseConnector):
         self._company_listing_url: str = self.FLATCHR_COMPANY_FALLBACK_URL
 
     def discover_offer_urls(self, client: Client) -> list[str]:
-        response = client.get(str(self.source.jobs_url))
-        response.raise_for_status()
-        tree = html_tree(response.text)
+        company_listing_url = self.FLATCHR_COMPANY_FALLBACK_URL
 
-        company_listing_url = self._discover_company_listing_url(tree, str(response.url))
+        try:
+            response = self._get_with_retry(client, str(self.source.jobs_url))
+            tree = html_tree(response.text)
+            company_listing_url = self._discover_company_listing_url(tree, str(response.url))
+        except Exception:
+            # La page institutionnelle ITAVI peut être lente ou indisponible ;
+            # la liste Flatchr connue reste la source opérationnelle des offres.
+            pass
+
         self._company_listing_url = company_listing_url
 
-        listing_response = client.get(company_listing_url)
-        listing_response.raise_for_status()
+        listing_response = self._get_with_retry(client, company_listing_url)
         listing_tree = html_tree(listing_response.text)
 
         offer_urls: list[str] = []
@@ -117,8 +130,7 @@ class ItaviConnector(BaseConnector):
         return offer_urls
 
     def parse_offer(self, client: Client, url: str) -> dict[str, object] | None:
-        response = client.get(url)
-        response.raise_for_status()
+        response = self._get_with_retry(client, url)
         tree = html_tree(response.text)
 
         title = normalize_spaces(self._node_text(tree, ["h1"]))
@@ -205,6 +217,26 @@ class ItaviConnector(BaseConnector):
             ),
             raw_payload=raw_item,
         )
+
+    def _get_with_retry(self, client: Client, url: str):
+        last_exc: Exception | None = None
+        attempts = [
+            {},
+            {"timeout": self.REQUEST_TIMEOUT_SECONDS},
+            {"headers": self.BROWSER_HEADERS, "timeout": self.REQUEST_TIMEOUT_SECONDS},
+        ]
+
+        for kwargs in attempts:
+            try:
+                response = client.get(url, **kwargs)
+                response.raise_for_status()
+                return response
+            except Exception as exc:
+                last_exc = exc
+
+        if last_exc:
+            raise last_exc
+        raise RuntimeError(f"Impossible de récupérer {url}")
 
     def _discover_company_listing_url(self, tree, base_url: str) -> str:
         iframe = tree.css_first(
