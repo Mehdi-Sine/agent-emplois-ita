@@ -110,8 +110,14 @@ def rgb(name: str) -> str:
     return f"{r/255:.4f} {g/255:.4f} {b/255:.4f}"
 
 
-def esc(text: str) -> bytes:
-    return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)").encode("cp1252", "replace")
+def text_to_pdf_hex(text: str) -> bytes:
+    """Encode text as a WinAnsi / CP1252 PDF hex string.
+
+    Hex strings keep the PDF content streams ASCII-only while preserving French
+    accents and Latin punctuation such as é, â, €, •, – and curly quotes.
+    Strict encoding prevents silent character loss in the generated carousel.
+    """
+    return text.encode("cp1252", "strict").hex().upper().encode("ascii")
 
 
 class PageBuilder:
@@ -161,7 +167,7 @@ class PageBuilder:
         for i, line in enumerate(lines):
             if i:
                 self.raw("T* ")
-            self.raw(b"(" + esc(line) + b") Tj ")
+            self.raw(b"<" + text_to_pdf_hex(line) + b"> Tj ")
         self.raw("ET\n")
 
     def label(self, x: float, y: float, text: str, fill: str = "yellow", color: str = "deep_green") -> None:
@@ -301,6 +307,35 @@ def offer_page(offer: Offer, page_index: int) -> bytes:
     return p.finish()
 
 
+def validate_pdf_text_encoding(pdf: bytes) -> None:
+    """Ensure important French strings are present with their CP1252 bytes.
+
+    The generator writes text as PDF hex strings, so this validates the actual
+    byte codes that readers will map through WinAnsiEncoding. It catches the
+    previous failure mode where accented Latin characters were dropped.
+    """
+    required_texts = [
+        "Ingénieur·e développement",
+        "‘lutte ravageurs’",
+        "Châlons-en-Champagne (51)",
+        "Réseaux expérimentaux en grandes parcelles",
+        "40–46 k€ • statut cadre",
+        "Stage M1 / césure",
+        "nectar extrafloral féverole",
+        "Phénotypage de variétés de féverole",
+        "BIODIVERSITÉ FONCTIONNELLE",
+        "PUBLIÉ LE 26 MAI 2026",
+        "PUBLIÉ LE 21 MAI 2026",
+    ]
+    missing = []
+    for text in required_texts:
+        encoded = b"<" + text_to_pdf_hex(text) + b">"
+        if encoded not in pdf:
+            missing.append(text)
+    if missing:
+        raise ValueError("Missing encoded carousel text: " + ", ".join(missing))
+
+
 def build_pdf(pages: Iterable[bytes]) -> bytes:
     pages = list(pages)
     objects: list[bytes] = []
@@ -326,16 +361,18 @@ def build_pdf(pages: Iterable[bytes]) -> bytes:
         out.extend(obj)
         out.extend(b"\nendobj\n")
     xref = len(out)
-    out.extend(f"xref\n0 {len(objects)+1}\n0000000000 65535 f \n".encode())
+    out.extend(f"xref\n0 {len(objects)+1}\n0000000000 65535 f\n".encode())
     for off in offsets[1:]:
-        out.extend(f"{off:010d} 00000 n \n".encode())
+        out.extend(f"{off:010d} 00000 n\n".encode())
     out.extend(f"trailer\n<< /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
     return bytes(out)
 
 
 def main() -> None:
     pages = [cover()] + [offer_page(offer, i + 2) for i, offer in enumerate(OFFERS)]
-    OUT.write_bytes(build_pdf(pages))
+    pdf = build_pdf(pages)
+    validate_pdf_text_encoding(pdf)
+    OUT.write_bytes(pdf)
     print(f"Generated {OUT} ({OUT.stat().st_size} bytes)")
 
 

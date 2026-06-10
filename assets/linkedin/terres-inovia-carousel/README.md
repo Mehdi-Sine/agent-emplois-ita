@@ -3,7 +3,7 @@
 Ce dossier contient un carrousel PDF carré prêt à publier sur LinkedIn :
 
 - `terres-inovia-3-offres-linkedin-2026-06-10.pdf` : PDF final en 4 pages carrées, dont une couverture et une page par offre.
-- `generate_carousel.py` : générateur Python autonome, sans dépendance externe, permettant de reconstruire le PDF.
+- `generate_carousel.py` : générateur Python autonome, sans dépendance externe, permettant de reconstruire le PDF et de vérifier l’encodage CP1252 / WinAnsi des textes accentués.
 
 ## Offres mises en avant
 
@@ -16,6 +16,10 @@ Les offres retenues correspondent aux trois dernières offres visibles sur la pa
 ## Direction artistique
 
 Le carrousel reprend une palette inspirée des codes visuels Terres Inovia : verts agricoles, accent jaune tournesol / oléagineux, orange chaleureux, fonds crème et typographie sans-serif très lisible. Chaque offre dispose d'une illustration vectorielle adaptée : ravageurs et parcelles expérimentales, réseau d'essais terrain, féverole et laboratoire.
+
+## Encodage des textes
+
+Le générateur encode les textes du PDF sous forme de chaînes hexadécimales CP1252 / WinAnsi afin de conserver les caractères latins accentués et la ponctuation française (`é`, `â`, `€`, `•`, `–`, guillemets typographiques). Une validation intégrée échoue si les libellés accentués clés ne sont pas présents dans le PDF généré.
 
 ## Régénération
 
