@@ -3,6 +3,33 @@ import type { Offer, PipelineRun, SourceStatus } from "@/types";
 
 const DEFAULT_LIMIT = 100;
 
+type OfferTypologyRow = {
+  id: string;
+  title: string;
+  organization: string | null;
+  location_text: string | null;
+  contract_type: string | null;
+  offer_type: string | null;
+  remote_mode: string | null;
+  posted_at: string | null;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  archived_at: string | null;
+  source_url: string | null;
+  application_url: string | null;
+  description_text: string | null;
+  sources:
+    | {
+        slug: string;
+        name: string;
+      }
+    | {
+        slug: string;
+        name: string;
+      }[]
+    | null;
+};
+
 type OfferByIdRow = {
   id: string;
   title: string;
@@ -182,4 +209,75 @@ export async function getSourceSlugs(): Promise<Array<{ slug: string; name: stri
   }
 
   return (data ?? []) as Array<{ slug: string; name: string }>;
+}
+
+export async function getAllOffersForTypology(): Promise<Offer[]> {
+  const db = getDb();
+  const pageSize = 1000;
+  let from = 0;
+  const offers: Offer[] = [];
+
+  while (true) {
+    const { data: rawData, error } = await db
+      .from("offers")
+      .select(
+        `
+        id,
+        title,
+        organization,
+        location_text,
+        contract_type,
+        offer_type,
+        remote_mode,
+        posted_at,
+        first_seen_at,
+        last_seen_at,
+        archived_at,
+        source_url,
+        application_url,
+        description_text,
+        sources!inner(
+          slug,
+          name
+        )
+      `
+      )
+      .order("last_seen_at", { ascending: false })
+      .range(from, from + pageSize - 1);
+
+    if (error) {
+      throw error;
+    }
+
+    const rows = (rawData ?? []) as OfferTypologyRow[];
+    rows.forEach((row) => {
+      const source = Array.isArray(row.sources) ? row.sources[0] ?? null : row.sources;
+      offers.push({
+        id: row.id,
+        title: row.title,
+        organization: row.organization ?? source?.name ?? "",
+        location_text: row.location_text,
+        contract_type: row.contract_type,
+        offer_type: row.offer_type,
+        remote_mode: row.remote_mode,
+        posted_at: row.posted_at,
+        first_seen_at: row.first_seen_at,
+        last_seen_at: row.last_seen_at,
+        archived_at: row.archived_at,
+        source_url: row.source_url ?? "",
+        application_url: row.application_url,
+        description_text: row.description_text,
+        source_slug: source?.slug ?? "",
+        source_name: source?.name ?? "",
+      });
+    });
+
+    if (rows.length < pageSize) {
+      break;
+    }
+
+    from += pageSize;
+  }
+
+  return offers;
 }
