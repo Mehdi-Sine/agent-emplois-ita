@@ -2,6 +2,11 @@ name: ita-jobs-daily
 
 on:
   workflow_dispatch:
+    inputs:
+      reason:
+        description: "Motif optionnel du test manuel du workflow daily"
+        required: false
+        default: ""
   schedule:
     # GitHub cron is UTC: 23:00 UTC covers 01:00 Paris during summer time (CEST),
     # 00:00 UTC covers 01:00 Paris during winter time (CET).
@@ -40,9 +45,13 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           JOBS_ARCHIVE_MISSED_THRESHOLD: "2"
           USER_AGENT: "ITA Jobs Bot/1.0 (+GitHub Actions)"
+          MANUAL_REASON: ${{ github.event.inputs.reason }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "Manual dispatch on daily workflow: bypass Paris guard"
+            if [ -n "$MANUAL_REASON" ]; then
+              echo "Manual test reason: $MANUAL_REASON"
+            fi
             python -m app.main_collect_daily --skip-paris-guard
           else
             python -m app.main_collect_daily
