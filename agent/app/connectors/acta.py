@@ -60,6 +60,12 @@ class ActaConnector(BaseConnector):
         "envie d’en savoir plus ?",
         "envie d'en savoir plus ?",
     }
+    INVALID_TITLES = {
+        "javascript is disabled",
+        "access denied",
+        "forbidden",
+        "just a moment...",
+    }
 
     def __init__(self, source) -> None:
         super().__init__(source)
@@ -82,7 +88,7 @@ class ActaConnector(BaseConnector):
             href = link.attributes.get("href")
             url = self._canonicalize_offer_url(absolute_url(str(response.url), href))
             title = normalize_spaces(link.text(separator=" ", strip=True))
-            if not url or not title:
+            if not url or not title or self._is_invalid_title(title):
                 continue
 
             blob = f"{url} {title}".lower()
@@ -111,7 +117,7 @@ class ActaConnector(BaseConnector):
             href = node.attributes.get("href")
             text = normalize_spaces(node.text(separator=" ", strip=True))
             url = self._canonicalize_offer_url(absolute_url(str(response.url), href))
-            if not url:
+            if not url or self._is_invalid_title(text):
                 continue
             blob = f"{url} {text or ''}".lower()
             if "spontan" in blob:
@@ -147,8 +153,12 @@ class ActaConnector(BaseConnector):
         except Exception:
             tree = None
 
-        title = (self._node_text(tree, ["h1", "h2"]) if tree else None) or self._as_clean_str(listing.get("title"))
-        if not title:
+        listing_title = self._as_clean_str(listing.get("title"))
+        detail_title = self._node_text(tree, ["h1", "h2"]) if tree else None
+        if self._is_invalid_title(detail_title):
+            detail_title = None
+        title = listing_title or detail_title
+        if not title or self._is_invalid_title(title):
             return None
 
         lines = self._extract_lines(tree) if tree else []
@@ -250,7 +260,7 @@ class ActaConnector(BaseConnector):
             url = self._canonicalize_offer_url(
                 self._as_clean_str(hit.get("url")) or self._build_algolia_job_url(hit)
             )
-            if not title or not url or url in seen:
+            if not title or self._is_invalid_title(title) or not url or url in seen:
                 continue
 
             blob = f"{url} {title}".lower()
@@ -310,7 +320,15 @@ class ActaConnector(BaseConnector):
             hit.get("companyName"),
             hit.get("company_name"),
         ]
-        return any("acta" in str(value or "").strip().lower() for value in name_candidates)
+        return any(self._is_acta_company_name(value) for value in name_candidates)
+
+    def _is_acta_company_name(self, value: object) -> bool:
+        name = str(value or "").strip().lower()
+        return bool(re.match(r"^acta(?:\b|\s|\s*[-–—|])", name))
+
+    def _is_invalid_title(self, value: object) -> bool:
+        title = self._as_clean_str(value)
+        return not title or title.lower() in self.INVALID_TITLES
 
     def _build_algolia_job_url(self, hit: dict[str, object]) -> str | None:
         slug = self._as_clean_str(hit.get("slug"))
