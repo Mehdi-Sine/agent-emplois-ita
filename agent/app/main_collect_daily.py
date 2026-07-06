@@ -1,5 +1,3 @@
-from datetime import datetime, timezone
-
 import argparse
 import csv
 import json
@@ -13,17 +11,11 @@ from app.logging_utils import build_logger
 from app.models import ConnectorResult, PersistResult, SourceConfig
 from app.persistence import SupabaseRepository
 from app.reporting import build_pipeline_status, summarize_run
+from app.schedule import should_run_now
 from app.connectors.registry import CONNECTOR_REGISTRY, build_connector
 
 
 logger = build_logger()
-
-
-def should_run_now(skip_guard: bool) -> bool:
-    if skip_guard:
-        return True
-    now_paris = datetime.now(ZoneInfo("Europe/Paris"))
-    return now_paris.minute == 1 and now_paris.hour == 0
 
 
 def write_json(path: Path, payload: object) -> None:

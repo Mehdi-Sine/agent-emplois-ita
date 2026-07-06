@@ -1,9 +1,13 @@
 name: ita-jobs-daily
 
 on:
-  schedule:
-    - cron: "1 * * * *"
   workflow_dispatch:
+  schedule:
+    # GitHub cron is UTC: 23:00 UTC covers 01:00 Paris during summer time (CEST),
+    # 00:00 UTC covers 01:00 Paris during winter time (CET).
+    # The Python guard below ensures only the 01:00 Europe/Paris scheduled run performs a collection.
+    - cron: "0 23 * * *"
+    - cron: "0 0 * * *"
 
 concurrency:
   group: ita-jobs-daily
