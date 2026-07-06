@@ -27,7 +27,7 @@ class ActaConnector(BaseConnector):
         "Pragma": "no-cache",
     }
     JOB_URL_RE = re.compile(
-        r"^https://www\.welcometothejungle\.com/fr/companies/acta/jobs/[^/?#]+/?$",
+        r"^https://www\.welcometothejungle\.com/fr/companies(?:-v1)?/acta/jobs/[^/?#]+/?$",
         re.IGNORECASE,
     )
     ISO_DATE_RE = re.compile(r'"date(?:Posted|Published)"\s*:\s*"(?P<value>[^"]+)"')
@@ -66,7 +66,7 @@ class ActaConnector(BaseConnector):
         seen: set[str] = set()
 
         for card in tree.css("[data-role='jobs:thumb']"):
-            link = card.css_first("a[href*='/fr/companies/acta/jobs/']")
+            link = card.css_first("a[href*='/fr/companies/acta/jobs/'], a[href*='/fr/companies-v1/acta/jobs/']")
             if not link:
                 continue
 
@@ -91,7 +91,7 @@ class ActaConnector(BaseConnector):
             return urls
 
         # fallback minimal si WTTJ ne rend pas les cartes avec le même markup
-        for node in tree.css("a[href*='/fr/companies/acta/jobs/']"):
+        for node in tree.css("a[href*='/fr/companies/acta/jobs/'], a[href*='/fr/companies-v1/acta/jobs/']"):
             href = node.attributes.get("href")
             text = normalize_spaces(node.text(separator=" ", strip=True))
             url = self._canonicalize_offer_url(absolute_url(str(response.url), href))

@@ -280,18 +280,35 @@ class Inov3ptConnector(BaseConnector):
             return False
 
         for pos in positions[:3]:
-            nearby = self._normalized_html[max(0, pos - 2500) : pos + 7000]
-            if (
-                "logo offre pourvue" in nearby
-                or "offre pourvue" in nearby
-                or "offre-pourvue" in nearby
-                or "offre pourvue.png" in nearby
-                or "recrutement termine" in nearby
-                or "recrutement terminé" in nearby
-            ):
+            nearby = self._normalized_html[pos : pos + 2500]
+            next_offer = self._find_next_offer_marker(nearby)
+            if next_offer is not None:
+                nearby = nearby[:next_offer]
+            if self._contains_filled_marker(nearby):
                 return True
 
         return False
+
+    def _find_next_offer_marker(self, text: str) -> int | None:
+        markers = [
+            match.start()
+            for match in re.finditer(r"\b(poste\s+(?:de|d['’])|offre\s+de\s+stage)\b", text, flags=re.IGNORECASE)
+            if match.start() > 20
+        ]
+        return min(markers) if markers else None
+
+    def _contains_filled_marker(self, text: str) -> bool:
+        normalized = self._normalize_for_search(text)
+        return any(
+            marker in normalized
+            for marker in [
+                "logo offre pourvue",
+                "offre pourvue",
+                "offre-pourvue",
+                "offre pourvue.png",
+                "recrutement termine",
+            ]
+        )
 
     # -------------------------------------------------------------------------
     # HELPERS
