@@ -36,7 +36,13 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           JOBS_ARCHIVE_MISSED_THRESHOLD: "2"
           USER_AGENT: "ITA Jobs Bot/1.0 (+GitHub Actions)"
-        run: python -m app.main_collect_daily
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual dispatch on daily workflow: bypass Paris guard"
+            python -m app.main_collect_daily --skip-paris-guard
+          else
+            python -m app.main_collect_daily
+          fi
 
       - name: Upload run artifacts
         uses: actions/upload-artifact@v4
@@ -55,7 +61,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           SUMMARY_EMAIL_ENABLED: ${{ vars.SUMMARY_EMAIL_ENABLED }}
-          SUMMARY_EMAIL_TO: ${{ vars.SUMMARY_EMAIL_TO }}
+          SUMMARY_EMAIL_TO: ${{ vars.SUMMARY_EMAIL_TO || 'rejoignez-nous@acta.asso.fr' }}
           SUMMARY_EMAIL_FROM: ${{ vars.SUMMARY_EMAIL_FROM }}
           SUMMARY_EMAIL_SUBJECT_PREFIX: ${{ vars.SUMMARY_EMAIL_SUBJECT_PREFIX }}
           APP_MONITORING_URL: ${{ vars.APP_MONITORING_URL }}

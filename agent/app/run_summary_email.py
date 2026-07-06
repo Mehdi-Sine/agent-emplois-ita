@@ -31,7 +31,7 @@ class MailSettings:
     @classmethod
     def from_env(cls) -> "MailSettings":
         enabled = os.getenv("SUMMARY_EMAIL_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
-        mail_to = [x.strip() for x in os.getenv("SUMMARY_EMAIL_TO", "").split(",") if x.strip()]
+        mail_to = [x.strip() for x in os.getenv("SUMMARY_EMAIL_TO", "rejoignez-nous@acta.asso.fr").split(",") if x.strip()]
         return cls(
             enabled=enabled,
             smtp_host=os.getenv("SMTP_HOST", "").strip(),

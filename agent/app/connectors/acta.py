@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from httpx import Client
 
@@ -18,8 +19,24 @@ from app.models import NormalizedOffer
 
 
 class ActaConnector(BaseConnector):
+    ALGOLIA_URL = (
+        "https://csekhvms53-dsn.algolia.net/1/indexes/*/queries"
+        "?x-algolia-agent=Algolia%20for%20JavaScript%20(4.20.0)%3B%20Browser"
+        "&search_origin=companies_search_client"
+    )
+    ALGOLIA_APP_ID = "CSEKHVMS53"
+    ALGOLIA_API_KEY = "4bd8f6215d0cc52b26430765769e65a0"
+    ALGOLIA_JOB_INDEX = "wk_cms_jobs_production"
+
+    BROWSER_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
     JOB_URL_RE = re.compile(
-        r"^https://www\.welcometothejungle\.com/fr/companies/acta/jobs/[^/?#]+/?$",
+        r"^https://www\.welcometothejungle\.com/fr/companies(?:-v1)?/acta/jobs/[^/?#]+/?$",
         re.IGNORECASE,
     )
     ISO_DATE_RE = re.compile(r'"date(?:Posted|Published)"\s*:\s*"(?P<value>[^"]+)"')
@@ -43,13 +60,19 @@ class ActaConnector(BaseConnector):
         "envie d’en savoir plus ?",
         "envie d'en savoir plus ?",
     }
+    INVALID_TITLES = {
+        "javascript is disabled",
+        "access denied",
+        "forbidden",
+        "just a moment...",
+    }
 
     def __init__(self, source) -> None:
         super().__init__(source)
         self._listing_by_url: dict[str, dict[str, object]] = {}
 
     def discover_offer_urls(self, client: Client) -> list[str]:
-        response = client.get(str(self.source.jobs_url))
+        response = self._get_with_fallback(client, str(self.source.jobs_url))
         response.raise_for_status()
         tree = html_tree(response.text)
 
@@ -58,14 +81,14 @@ class ActaConnector(BaseConnector):
         seen: set[str] = set()
 
         for card in tree.css("[data-role='jobs:thumb']"):
-            link = card.css_first("a[href*='/fr/companies/acta/jobs/']")
+            link = card.css_first("a[href*='/fr/companies/acta/jobs/'], a[href*='/fr/companies-v1/acta/jobs/']")
             if not link:
                 continue
 
             href = link.attributes.get("href")
             url = self._canonicalize_offer_url(absolute_url(str(response.url), href))
             title = normalize_spaces(link.text(separator=" ", strip=True))
-            if not url or not title:
+            if not url or not title or self._is_invalid_title(title):
                 continue
 
             blob = f"{url} {title}".lower()
@@ -82,12 +105,19 @@ class ActaConnector(BaseConnector):
         if urls:
             return urls
 
+        try:
+            algolia_urls = self._discover_algolia_offer_urls(client)
+        except Exception:
+            algolia_urls = []
+        if algolia_urls:
+            return algolia_urls
+
         # fallback minimal si WTTJ ne rend pas les cartes avec le même markup
-        for node in tree.css("a[href*='/fr/companies/acta/jobs/']"):
+        for node in tree.css("a[href*='/fr/companies/acta/jobs/'], a[href*='/fr/companies-v1/acta/jobs/']"):
             href = node.attributes.get("href")
             text = normalize_spaces(node.text(separator=" ", strip=True))
             url = self._canonicalize_offer_url(absolute_url(str(response.url), href))
-            if not url:
+            if not url or self._is_invalid_title(text):
                 continue
             blob = f"{url} {text or ''}".lower()
             if "spontan" in blob:
@@ -111,16 +141,28 @@ class ActaConnector(BaseConnector):
             self.discover_offer_urls(client)
         listing = self._listing_by_url.get(url, {})
 
-        response = client.get(url)
-        response.raise_for_status()
-        tree = html_tree(response.text)
+        detail_text = ""
+        detail_url = url
+        tree = None
+        try:
+            response = self._get_with_fallback(client, url)
+            response.raise_for_status()
+            detail_text = response.text
+            detail_url = str(response.url)
+            tree = html_tree(detail_text)
+        except Exception:
+            tree = None
 
-        title = self._node_text(tree, ["h1", "h2"]) or self._as_clean_str(listing.get("title"))
-        if not title:
+        listing_title = self._as_clean_str(listing.get("title"))
+        detail_title = self._node_text(tree, ["h1", "h2"]) if tree else None
+        if self._is_invalid_title(detail_title):
+            detail_title = None
+        title = listing_title or detail_title
+        if not title or self._is_invalid_title(title):
             return None
 
-        lines = self._extract_lines(tree)
-        header_lines = self._extract_header_lines(lines, title)
+        lines = self._extract_lines(tree) if tree else []
+        header_lines = self._extract_header_lines(lines, title) if lines else []
 
         contract_type = (
             self._as_clean_str(listing.get("contract_type"))
@@ -136,12 +178,15 @@ class ActaConnector(BaseConnector):
         city = self._extract_city(location_text)
 
         remote_mode = self._as_clean_str(listing.get("remote_mode")) or self._extract_remote_mode(header_lines)
-        posted_at = self._extract_posted_at(response.text)
-        description_text = self._extract_description(lines, title)
-        application_url = self._extract_application_url(tree, str(response.url)) or url
-        deadline = self._extract_deadline(lines)
+        posted_at = self._extract_posted_at(detail_text) if detail_text else None
+        posted_at = posted_at or listing.get("posted_at")
+        description_text = self._extract_description(lines, title) if lines else None
+        description_text = description_text or self._as_clean_str(listing.get("description_text"))
+        application_url = self._extract_application_url(tree, detail_url) if tree else None
+        application_url = application_url or url
+        deadline = self._extract_deadline(lines) if lines else None
 
-        is_filled = self._is_filled(lines)
+        is_filled = self._is_filled(lines) if lines else False
         listing_status = "filled" if is_filled else "open"
         offer_type = self._infer_offer_type(title, contract_type, description_text)
 
@@ -201,6 +246,128 @@ class ActaConnector(BaseConnector):
             ),
             raw_payload=raw_item,
         )
+
+    def _discover_algolia_offer_urls(self, client: Client) -> list[str]:
+        hits = self._search_algolia_jobs(client)
+        urls: list[str] = []
+        seen: set[str] = set()
+
+        for hit in hits:
+            if not self._is_acta_algolia_hit(hit):
+                continue
+
+            title = self._as_clean_str(hit.get("name") or hit.get("title"))
+            url = self._canonicalize_offer_url(
+                self._as_clean_str(hit.get("url")) or self._build_algolia_job_url(hit)
+            )
+            if not title or self._is_invalid_title(title) or not url or url in seen:
+                continue
+
+            blob = f"{url} {title}".lower()
+            if "spontan" in blob:
+                continue
+
+            meta = {
+                "title": title,
+                "contract_type": self._extract_algolia_contract_type(hit),
+                "location_text": self._extract_algolia_location(hit) or self._fallback_location_from_url(url),
+                "city": self._extract_city(self._extract_algolia_location(hit) or self._fallback_location_from_url(url)),
+                "remote_mode": self._extract_algolia_remote(hit),
+                "posted_at": self._parse_algolia_date(hit.get("published_at") or hit.get("date")),
+                "description_text": self._as_clean_str(hit.get("description")),
+            }
+            self._listing_by_url[url] = meta
+            seen.add(url)
+            urls.append(url)
+
+        return urls
+
+    def _search_algolia_jobs(self, client: Client) -> list[dict[str, object]]:
+        params = urlencode({"hitsPerPage": 50, "page": 0, "query": "acta"})
+        payload = {"requests": [{"indexName": self.ALGOLIA_JOB_INDEX, "params": params}]}
+        headers = {
+            "x-algolia-application-id": self.ALGOLIA_APP_ID,
+            "x-algolia-api-key": self.ALGOLIA_API_KEY,
+            "content-type": "application/json",
+            "accept": "*/*",
+            "origin": "https://www.welcometothejungle.com",
+            "referer": "https://www.welcometothejungle.com/",
+        }
+        response = client.post(self.ALGOLIA_URL, content=json.dumps(payload), headers=headers, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        results = data.get("results") if isinstance(data, dict) else None
+        if not results or not isinstance(results, list):
+            return []
+        hits = results[0].get("hits") if isinstance(results[0], dict) else None
+        return hits if isinstance(hits, list) else []
+
+    def _is_acta_algolia_hit(self, hit: dict[str, object]) -> bool:
+        organization = hit.get("organization")
+        organization = organization if isinstance(organization, dict) else {}
+        slug_candidates = [
+            hit.get("organization_slug"),
+            hit.get("companySlug"),
+            hit.get("company_slug"),
+            organization.get("slug"),
+        ]
+        if any(str(value or "").strip().lower() == "acta" for value in slug_candidates):
+            return True
+
+        name_candidates = [
+            organization.get("name"),
+            hit.get("organization_name"),
+            hit.get("companyName"),
+            hit.get("company_name"),
+        ]
+        return any(self._is_acta_company_name(value) for value in name_candidates)
+
+    def _is_acta_company_name(self, value: object) -> bool:
+        name = str(value or "").strip().lower()
+        return bool(re.match(r"^acta(?:\b|\s|\s*[-–—|])", name))
+
+    def _is_invalid_title(self, value: object) -> bool:
+        title = self._as_clean_str(value)
+        return not title or title.lower() in self.INVALID_TITLES
+
+    def _build_algolia_job_url(self, hit: dict[str, object]) -> str | None:
+        slug = self._as_clean_str(hit.get("slug"))
+        if not slug:
+            return None
+        return f"https://www.welcometothejungle.com/fr/companies-v1/acta/jobs/{slug}"
+
+    def _extract_algolia_contract_type(self, hit: dict[str, object]) -> str | None:
+        names = hit.get("contract_type_names")
+        if isinstance(names, dict):
+            raw = names.get("fr") or names.get("en")
+            inferred = self._infer_contract_type(str(raw))
+            if inferred:
+                return inferred
+        return self._infer_contract_type(self._as_clean_str(hit.get("contract_type")))
+
+    def _extract_algolia_location(self, hit: dict[str, object]) -> str | None:
+        office = hit.get("office")
+        office = office if isinstance(office, dict) else {}
+        offices = hit.get("offices")
+        if isinstance(offices, list) and offices and isinstance(offices[0], dict):
+            office = offices[0]
+        city = self._as_clean_str(office.get("city"))
+        return city or self._as_clean_str(hit.get("location"))
+
+    def _extract_algolia_remote(self, hit: dict[str, object]) -> str | None:
+        remote = self._as_clean_str(hit.get("remote"))
+        if not remote or remote.lower() == "unknown":
+            return None
+        return remote
+
+    def _parse_algolia_date(self, value: object) -> datetime | None:
+        raw = self._as_clean_str(value)
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(tzinfo=None)
+        except ValueError:
+            return None
 
     def _canonicalize_offer_url(self, url: str | None) -> str | None:
         if not url:
@@ -473,3 +640,16 @@ class ActaConnector(BaseConnector):
             return None
         text = normalize_spaces(str(value))
         return text or None
+
+
+    def _get_with_fallback(self, client: Client, url: str):
+        response = client.get(url)
+        if response.status_code != 403:
+            response.raise_for_status()
+            return response
+
+        retry_headers = dict(self.BROWSER_HEADERS)
+        retry_headers["Referer"] = str(self.source.site_url)
+        response = client.get(url, headers=retry_headers)
+        response.raise_for_status()
+        return response
