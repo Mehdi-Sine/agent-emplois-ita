@@ -40,6 +40,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run collector
+        id: collect
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
@@ -66,7 +67,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Send run summary email
-        if: always()
+        if: always() && steps.collect.outputs.did_run == 'true'
         continue-on-error: true
         working-directory: agent
         run: python -m app.run_summary_email
@@ -84,3 +85,4 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           SMTP_USE_TLS: ${{ vars.SMTP_USE_TLS }}
           SMTP_USE_SSL: ${{ vars.SMTP_USE_SSL }}
+          PIPELINE_RUN_ID: ${{ steps.collect.outputs.pipeline_run_id }}

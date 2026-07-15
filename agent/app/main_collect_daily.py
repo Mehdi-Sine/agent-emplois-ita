@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -13,6 +14,13 @@ from app.persistence import SupabaseRepository
 from app.reporting import build_pipeline_status, summarize_run
 from app.schedule import should_run_now
 from app.connectors.registry import CONNECTOR_REGISTRY, build_connector
+
+
+def write_github_output(name: str, value: str) -> None:
+    output_path = os.getenv("GITHUB_OUTPUT", "").strip()
+    if output_path:
+        with open(output_path, "a", encoding="utf-8") as handle:
+            handle.write(f"{name}={value}\n")
 
 
 logger = build_logger()
@@ -37,17 +45,21 @@ def write_offers_csv(path: Path, offers: list[dict]) -> None:
 
 def run_collection(selected_sources: list[str] | None = None, skip_paris_guard: bool = False) -> int:
     if not should_run_now(skip_paris_guard):
+        write_github_output("did_run", "false")
+        write_github_output("pipeline_run_id", "")
         logger.info("Exécution ignorée par le garde-fou horaire Europe/Paris.")
         return 0
 
     settings = Settings.from_env()
     source_rows = [SourceConfig(**row) for row in load_sources_config()]
-    source_rows = [source for source in source_rows if source.slug in CONNECTOR_REGISTRY]
+    source_rows = [source for source in source_rows if source.enabled and source.slug in CONNECTOR_REGISTRY]
     if selected_sources:
         selected_set = set(selected_sources)
         source_rows = [source for source in source_rows if source.slug in selected_set]
 
     if not source_rows:
+        write_github_output("did_run", "false")
+        write_github_output("pipeline_run_id", "")
         logger.info("Aucune source sélectionnée.")
         return 0
 
@@ -58,6 +70,8 @@ def run_collection(selected_sources: list[str] | None = None, skip_paris_guard: 
     repository = SupabaseRepository(settings.supabase_url, settings.supabase_service_key)
     sources_db = repository.sync_sources(source_rows)
     pipeline_run = repository.create_pipeline_run("cron" if not selected_sources else "manual", len(source_rows))
+    write_github_output("did_run", "true")
+    write_github_output("pipeline_run_id", str(pipeline_run["id"]))
 
     source_results: list[ConnectorResult] = []
     persist_results: list[PersistResult] = []
