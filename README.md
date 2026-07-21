@@ -47,6 +47,7 @@ La V1 contient 7 connecteurs activables et faciles à étendre :
 - `NEXT_PUBLIC_APP_NAME`
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_KEY`
+- `ADMIN_PASSWORD` facultatif, défaut `DirectionACTA2026`, utilisé pour protéger l'accès à `/monitoring` via `/administration`
 
 ## Déploiement conseillé
 
