@@ -3,6 +3,10 @@ from datetime import datetime, timezone
 from app.schedule import should_run_now
 
 
+def test_guard_runs_at_midnight_paris_in_winter() -> None:
+    assert should_run_now(False, datetime(2026, 1, 5, 23, 0, tzinfo=timezone.utc))
+
+
 def test_guard_runs_at_one_am_paris_in_winter() -> None:
     assert should_run_now(False, datetime(2026, 1, 6, 0, 0, tzinfo=timezone.utc))
 

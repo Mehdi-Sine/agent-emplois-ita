@@ -35,9 +35,9 @@ CONNECTOR_REGISTRY: dict[str, type[BaseConnector]] = {
 
 
 def build_connector(source: SourceConfig) -> BaseConnector:
-    connector_cls = CONNECTOR_REGISTRY.get(source.slug) or CONNECTOR_REGISTRY.get(source.connector_type)
+    connector_cls = CONNECTOR_REGISTRY.get(source.slug) or CONNECTOR_REGISTRY.get(source.mode)
     if connector_cls is None:
         raise KeyError(
-            f"Aucun connecteur enregistré pour slug={source.slug} connector_type={source.connector_type}"
+            f"Aucun connecteur enregistré pour slug={source.slug} mode={source.mode}"
         )
     return connector_cls(source)
