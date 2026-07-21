@@ -28,6 +28,19 @@ class CevaConnectorTests(unittest.TestCase):
         self.assertTrue(self.connector._is_filled("OFFRE D'EMPLOI", "Poste pourvu"))
         self.assertFalse(self.connector._is_filled("OFFRE D'EMPLOI", "Mission en cours"))
 
+    def test_extracts_stage_offer_title(self) -> None:
+        lines = [
+            "Recrutement",
+            "OFFRE DE STAGE :",
+            "Offre de stage_Stratégie Marketing & Développement. International – F/H.",
+            "Partagez cette page :",
+        ]
+
+        self.assertEqual(
+            self.connector._extract_title(lines),
+            "Offre de stage_Stratégie Marketing & Développement. International – F/H.",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
