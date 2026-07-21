@@ -58,6 +58,24 @@ class ActaConnectorTests(unittest.TestCase):
             ["https://www.welcometothejungle.com/fr/companies/acta/jobs/assistant_paris_ABC"],
         )
 
+    def test_configured_seed_offer_urls_are_canonicalized(self) -> None:
+        source = SourceConfig(
+            slug="acta",
+            name="ACTA",
+            site_url="https://www.acta.asso.fr",
+            jobs_url="https://www.welcometothejungle.com/fr/companies/acta/jobs",
+            seed_offer_urls=[
+                "https://www.welcometothejungle.com/fr/companies-v1/acta/jobs/assistant_paris_ABC?utm=ignored",
+                "https://www.welcometothejungle.com/fr/companies-v1/acta/jobs/candidatures-spontanees",
+            ],
+        )
+        connector = ActaConnector(source)
+
+        self.assertEqual(
+            connector._configured_seed_offer_urls(),
+            ["https://www.welcometothejungle.com/fr/companies/acta/jobs/assistant_paris_ABC"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

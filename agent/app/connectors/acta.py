@@ -138,6 +138,19 @@ class ActaConnector(BaseConnector):
             }
             urls.append(url)
 
+        for url in self._configured_seed_offer_urls():
+            if url in seen:
+                continue
+            seen.add(url)
+            self._listing_by_url[url] = {
+                "title": None,
+                "contract_type": None,
+                "location_text": self._fallback_location_from_url(url),
+                "city": self._fallback_location_from_url(url),
+                "remote_mode": None,
+            }
+            urls.append(url)
+
         return urls
 
     def parse_offer(self, client: Client, url: str) -> dict[str, object] | None:
@@ -255,6 +268,14 @@ class ActaConnector(BaseConnector):
             if self._canonicalize_offer_url(href) or self._canonicalize_offer_url(absolute_url(str(self.source.jobs_url), href)):
                 return link
         return None
+
+    def _configured_seed_offer_urls(self) -> list[str]:
+        urls: list[str] = []
+        for raw_url in self.source.seed_offer_urls:
+            url = self._canonicalize_offer_url(raw_url)
+            if url and "spontan" not in url.lower() and url not in urls:
+                urls.append(url)
+        return urls
 
     def _extract_card_meta(self, card, title: str, url: str) -> dict[str, object]:
         text = card.text(separator="\n", strip=True)

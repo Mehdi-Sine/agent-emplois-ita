@@ -158,3 +158,5 @@ sources:
     enabled: true
     mode: http
     timeout_seconds: 20
+    seed_offer_urls:
+      - https://www.welcometothejungle.com/fr/companies/acta/jobs/assistant-administratif-ve-et-financier-ere_paris_ALITA_NldyGWZ
