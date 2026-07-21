@@ -57,6 +57,9 @@ def run_collection(selected_sources: list[str] | None = None, skip_paris_guard: 
         selected_set = set(selected_sources)
         source_rows = [source for source in source_rows if source.slug in selected_set]
 
+    repository = SupabaseRepository(settings.supabase_url, settings.supabase_service_key)
+    sources_db = repository.sync_sources(all_source_rows)
+
     if not source_rows:
         write_github_output("did_run", "false")
         write_github_output("pipeline_run_id", "")
@@ -67,8 +70,6 @@ def run_collection(selected_sources: list[str] | None = None, skip_paris_guard: 
     run_dir = RUNS_DIR / timestamp
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    repository = SupabaseRepository(settings.supabase_url, settings.supabase_service_key)
-    sources_db = repository.sync_sources(source_rows)
     pipeline_run = repository.create_pipeline_run("cron" if not selected_sources else "manual", len(source_rows))
     write_github_output("did_run", "true")
     write_github_output("pipeline_run_id", str(pipeline_run["id"]))

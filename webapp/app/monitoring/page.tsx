@@ -27,6 +27,15 @@ function statusClass(status: string) {
   return "border-slate-200 bg-slate-50 text-slate-700";
 }
 
+function statusLabel(status: string) {
+  const upper = status.toUpperCase();
+  if (upper === "SKIPPED") return "Ignoré";
+  if (upper === "SUCCESS") return "OK";
+  if (upper === "PARTIAL_SUCCESS") return "Partiel";
+  if (upper === "FAILED" || upper === "ERROR") return "Erreur";
+  return status;
+}
+
 function SummaryCard({ label, value }: { label: string; value: string | number }) {
   return (
     <div className="rounded-3xl border border-black/10 bg-[#f6f3ee] p-5">
@@ -78,7 +87,7 @@ export default async function MonitoringPage() {
                 <article key={run.id} className="rounded-3xl border border-black/10 bg-[#f6f3ee] p-5">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <span className={`w-fit rounded-full border px-3 py-1 text-xs font-black ${statusClass(run.status)}`}>
-                      {run.status}
+                      {statusLabel(run.status)}
                     </span>
                     <span className="text-sm font-bold text-slate-500">{formatDate(run.createdAt)}</span>
                   </div>
@@ -101,7 +110,7 @@ export default async function MonitoringPage() {
                 <p className="mt-1 text-sm font-bold text-slate-500">{source.slug}</p>
               </div>
               <span className={`shrink-0 rounded-full border px-3 py-1 text-xs font-black ${statusClass(source.status)}`}>
-                {source.status}
+                {statusLabel(source.status)}
               </span>
             </div>
 
@@ -145,7 +154,9 @@ export default async function MonitoringPage() {
                   Page source ↗
                 </a>
               ) : null}
-              <RunTriggerButton label="Mettre à jour" endpoint={`/api/collect/${source.slug}`} compact />
+              {source.enabled ? (
+                <RunTriggerButton label="Mettre à jour" endpoint={`/api/collect/${source.slug}`} compact />
+              ) : null}
             </div>
           </article>
         ))}
