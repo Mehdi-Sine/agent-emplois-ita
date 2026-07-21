@@ -91,7 +91,7 @@ sources:
     name: inov3PT
     site_url: https://www.inov3pt.fr
     jobs_url: https://www.inov3pt.fr/recrutements
-    enabled: true
+    enabled: false
     mode: http
     timeout_seconds: 20
 
