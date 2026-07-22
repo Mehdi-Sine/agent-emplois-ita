@@ -91,7 +91,7 @@ sources:
     name: inov3PT
     site_url: https://www.inov3pt.fr
     jobs_url: https://www.inov3pt.fr/recrutements
-    enabled: true
+    enabled: false
     mode: http
     timeout_seconds: 20
 
@@ -158,3 +158,5 @@ sources:
     enabled: true
     mode: http
     timeout_seconds: 20
+    seed_offer_urls:
+      - https://www.welcometothejungle.com/fr/companies/acta/jobs/assistant-administratif-ve-et-financier-ere_paris_ALITA_NldyGWZ

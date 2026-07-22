@@ -12,7 +12,14 @@ from app.models import NormalizedOffer
 
 
 class CevaConnector(BaseConnector):
-    MARKERS = {"OFFRE D’EMPLOI :", "OFFRE D'EMPLOI :", "OFFRE D’EMPLOI", "OFFRE D'EMPLOI"}
+    MARKERS = {
+        "OFFRE D’EMPLOI :",
+        "OFFRE D'EMPLOI :",
+        "OFFRE D’EMPLOI",
+        "OFFRE D'EMPLOI",
+        "OFFRE DE STAGE :",
+        "OFFRE DE STAGE",
+    }
 
     def discover_offer_urls(self, client: Client) -> list[str]:
         response = client.get(str(self.source.jobs_url))
