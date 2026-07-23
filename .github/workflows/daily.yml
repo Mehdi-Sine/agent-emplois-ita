@@ -67,12 +67,11 @@ jobs:
 
       - name: Install dependencies
         id: install
-        if: steps.schedule.outputs.should_collect == 'true'
         run: pip install -r requirements.txt
 
       - name: Run collector
         id: collect
-        if: steps.schedule.outputs.should_collect == 'true'
+        if: success() && steps.schedule.outputs.should_collect == 'true'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
