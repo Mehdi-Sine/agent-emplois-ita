@@ -67,11 +67,11 @@ jobs:
 
       - name: Install dependencies
         id: install
-        if: steps.schedule.outputs.should_collect == 'true'
         run: pip install -r requirements.txt
 
       - name: Run collector
         id: collect
+        if: success() && steps.schedule.outputs.should_collect == 'true'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
@@ -111,7 +111,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Send run summary email
-        if: always() && steps.collect.outputs.did_run == 'true'
+        if: always() && steps.schedule.outputs.should_collect == 'true' && steps.collect.outputs.did_run == 'true'
         continue-on-error: true
         working-directory: agent
         run: python -m app.run_summary_email

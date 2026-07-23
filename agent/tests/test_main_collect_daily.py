@@ -35,10 +35,13 @@ class FakeRepository:
 
 
 class FakeConnector:
+    fetched_slugs: list[str] = []
+
     def __init__(self, source):
         self.source = source
 
     def fetch(self, client):
+        FakeConnector.fetched_slugs.append(self.source.slug)
         now = datetime.now(timezone.utc)
         return ConnectorResult(
             source_slug=self.source.slug,
@@ -74,6 +77,7 @@ def test_daily_collection_filters_disabled_sources_and_exports_pipeline_id(tmp_p
     output_path = tmp_path / "github-output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output_path))
     FakeRepository.synced_slugs = []
+    FakeConnector.fetched_slugs = []
 
     monkeypatch.setattr(
         "app.main_collect_daily.Settings.from_env",
@@ -115,7 +119,8 @@ def test_daily_collection_filters_disabled_sources_and_exports_pipeline_id(tmp_p
 
     assert run_collection(skip_paris_guard=True) == 0
 
-    assert FakeRepository.synced_slugs == ["enabled_source"]
+    assert FakeRepository.synced_slugs == ["enabled_source", "disabled_source"]
+    assert FakeConnector.fetched_slugs == ["enabled_source"]
     assert output_path.read_text(encoding="utf-8").splitlines() == [
         "did_run=true",
         "pipeline_run_id=pipeline-1",

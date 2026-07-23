@@ -51,14 +51,16 @@ def run_collection(selected_sources: list[str] | None = None, skip_paris_guard: 
         return 0
 
     settings = Settings.from_env()
-    source_rows = [SourceConfig(**row) for row in load_sources_config()]
-    source_rows = [source for source in source_rows if source.enabled and source.slug in CONNECTOR_REGISTRY]
+    configured_sources = [SourceConfig(**row) for row in load_sources_config()]
+    # Keep Supabase source metadata in sync for every configured ITA, including
+    # disabled sources, then collect only enabled sources with a registered connector.
+    source_rows = [source for source in configured_sources if source.enabled and source.slug in CONNECTOR_REGISTRY]
     if selected_sources:
         selected_set = set(selected_sources)
         source_rows = [source for source in source_rows if source.slug in selected_set]
 
     repository = SupabaseRepository(settings.supabase_url, settings.supabase_service_key)
-    sources_db = repository.sync_sources(all_source_rows)
+    sources_db = repository.sync_sources(configured_sources)
 
     if not source_rows:
         write_github_output("did_run", "false")
