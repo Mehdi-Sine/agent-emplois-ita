@@ -15,6 +15,10 @@ def test_guard_runs_at_one_am_paris_in_summer() -> None:
     assert should_run_now(False, datetime(2026, 7, 6, 23, 0, tzinfo=timezone.utc))
 
 
+def test_guard_allows_delayed_github_cron_within_paris_window() -> None:
+    assert should_run_now(False, datetime(2026, 7, 6, 23, 17, tzinfo=timezone.utc))
+
+
 def test_guard_rejects_other_paris_hours() -> None:
     assert not should_run_now(False, datetime(2026, 7, 6, 0, 0, tzinfo=timezone.utc))
 
