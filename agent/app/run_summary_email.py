@@ -371,8 +371,8 @@ def _render_html(
     pipeline_label = _status_label(pipeline_status)
 
     started_at = _safe_str(pipeline_run, "started_at", "created_at")
-    finished_at = _safe_str(pipeline_run, "finished_at", "updated_at")
-    trigger = _safe_str(pipeline_run, "trigger", "trigger_mode", "run_type") or "github_actions"
+    finished_at = _safe_str(pipeline_run, "ended_at", "finished_at", "updated_at")
+    trigger = _safe_str(pipeline_run, "trigger_type", "trigger", "trigger_mode", "run_type") or "github_actions"
 
     summary_cards = [
         ("Sources configurées", totals["config_total"]),
@@ -544,8 +544,8 @@ def _render_html(
 def _render_text(pipeline_run: dict[str, Any], rows: list[dict[str, Any]], totals: dict[str, int], monitoring_url: str | None) -> str:
     pipeline_status = _status_label(_status_normalize(_safe_str(pipeline_run, "status")))
     started_at = _safe_str(pipeline_run, "started_at", "created_at")
-    finished_at = _safe_str(pipeline_run, "finished_at", "updated_at")
-    trigger = _safe_str(pipeline_run, "trigger", "trigger_mode", "run_type") or "github_actions"
+    finished_at = _safe_str(pipeline_run, "ended_at", "finished_at", "updated_at")
+    trigger = _safe_str(pipeline_run, "trigger_type", "trigger", "trigger_mode", "run_type") or "github_actions"
 
     lines = [
         "Agent Emplois ITA — récap de run",
@@ -638,7 +638,12 @@ def main() -> int:
 
     client = create_client(supabase_url, supabase_service_key)
 
-    pipeline_resp = client.table("pipeline_runs").select("*").order("created_at", desc=True).limit(1).execute()
+    pipeline_run_id = os.getenv("PIPELINE_RUN_ID", "").strip()
+    pipeline_query = client.table("pipeline_runs").select("*")
+    if pipeline_run_id:
+        pipeline_resp = pipeline_query.eq("id", pipeline_run_id).limit(1).execute()
+    else:
+        pipeline_resp = pipeline_query.order("created_at", desc=True).limit(1).execute()
     pipeline_runs = pipeline_resp.data or []
     if not pipeline_runs:
         print("Aucun pipeline_run trouvé -> aucun email envoyé.")
@@ -649,7 +654,7 @@ def main() -> int:
 
     pipeline_status = _status_normalize(_safe_str(pipeline_run, "status"))
     subject_icon = {"success": "🟢", "failed": "🔴", "running": "🟡"}.get(pipeline_status, "⚪")
-    finished_at = _fmt_dt_fr(_safe_str(pipeline_run, "finished_at", "updated_at"))
+    finished_at = _fmt_dt_fr(_safe_str(pipeline_run, "ended_at", "finished_at", "updated_at"))
     subject = f"{subject_icon} {settings.subject_prefix} — run {finished_at}"
 
     logo_path = _find_logo_path()

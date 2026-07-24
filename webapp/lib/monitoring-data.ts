@@ -74,6 +74,16 @@ function pickDate(row: GenericRow, keys: string[]): string | null {
   return null;
 }
 
+function pickBoolean(row: GenericRow, keys: string[], defaultValue: boolean): boolean {
+  for (const key of keys) {
+    const value = row?.[key];
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+  return defaultValue;
+}
+
 function mergeStatusBySource(
   source: GenericRow,
   statusRows: GenericRow[],
@@ -82,6 +92,7 @@ function mergeStatusBySource(
 ): MonitoringSourceCard {
   const sourceId = String(source.id);
   const slug = pickString(source, ["slug"]) ?? sourceId;
+  const enabled = pickBoolean(source, ["is_enabled", "enabled"], true);
   const status = statusRows.find((row) => {
     const rowSourceId = pickString(row, ["source_id"]);
     const rowSlug = pickString(row, ["source_slug", "slug"]);
@@ -93,8 +104,8 @@ function mergeStatusBySource(
     slug,
     name: pickString(source, ["name", "source_name"]) ?? slug,
     jobsUrl: pickString(source, ["jobs_url", "site_url"]),
-    enabled: source.enabled !== false,
-    status: pickString(status ?? {}, ["status", "run_status"]) ?? "UNKNOWN",
+    enabled,
+    status: enabled ? (pickString(status ?? {}, ["status", "run_status"]) ?? "UNKNOWN") : "SKIPPED",
     offers: activeCounts.get(sourceId) ?? 0,
     archived: archivedCounts.get(sourceId) ?? 0,
     newOffers: pickNumber(status ?? {}, [

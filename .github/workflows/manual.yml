@@ -28,10 +28,24 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Record workflow launch
+        if: always()
+        continue-on-error: true
+        run: |
+          python -m app.workflow_event_log \
+            --event-type manual_workflow \
+            --status started \
+            --details-json '{"sources":"${{ github.event.inputs.sources }}"}'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
       - name: Install dependencies
+        id: install
         run: pip install -r requirements.txt
 
       - name: Run manual collection
+        id: collect
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
@@ -54,6 +68,19 @@ jobs:
             python -m app.main_collect_daily --skip-paris-guard "${ARGS[@]}"
           fi
 
+      - name: Record workflow completion
+        if: always()
+        continue-on-error: true
+        run: |
+          python -m app.workflow_event_log \
+            --event-type manual_workflow \
+            --status '${{ job.status }}' \
+            --details-json '{"sources":"${{ github.event.inputs.sources }}","install_conclusion":"${{ steps.install.conclusion }}","collector_conclusion":"${{ steps.collect.conclusion }}"}'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PIPELINE_RUN_ID: ${{ steps.collect.outputs.pipeline_run_id }}
+
       - name: Upload run artifacts
         uses: actions/upload-artifact@v4
         if: always()
@@ -63,7 +90,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Send run summary email
-        if: always()
+        if: always() && steps.collect.outputs.did_run == 'true'
         continue-on-error: true
         working-directory: agent
         run: python -m app.run_summary_email
@@ -81,3 +108,4 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           SMTP_USE_TLS: ${{ vars.SMTP_USE_TLS }}
           SMTP_USE_SSL: ${{ vars.SMTP_USE_SSL }}
+          PIPELINE_RUN_ID: ${{ steps.collect.outputs.pipeline_run_id }}
