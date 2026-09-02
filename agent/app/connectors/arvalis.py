@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from urllib.parse import urlunsplit, urlsplit
+from urllib.parse import urljoin, urlunsplit, urlsplit
 
 from httpx import Client
 
@@ -21,8 +21,6 @@ class ArvalisConnector(BaseConnector):
     LISTING_URL = "https://www.arvalis.fr/l-institut/nous-rejoindre/offres-d-emploi-de-stages"
     DETAIL_PREFIX = "https://www.arvalis.fr/l-institut/nous-rejoindre/offres-d-emploi-de-stages/"
 
-    ALGOLIA_APP_ID = "5JZPVHMY0V"
-    ALGOLIA_API_KEY = "63b868a1de88d91927a5feb55484245c"
     ALGOLIA_INDEX_NAME = "job_offers"
     ALGOLIA_HITS_PER_PAGE = 100
 
@@ -123,9 +121,24 @@ class ArvalisConnector(BaseConnector):
 
     def discover_offer_urls(self, client: Client) -> list[str]:
         self._hits_by_url = {}
-        hits = self._fetch_all_algolia_hits(client)
+        listing = client.get(self.LISTING_URL)
+        listing.raise_for_status()
 
-        urls: list[str] = []
+        urls = self._extract_offer_links(listing.text, str(listing.url))
+        if urls:
+            return urls
+
+        credentials = self._discover_algolia_credentials(client, listing.text, str(listing.url))
+        if credentials is None:
+            raise RuntimeError(
+                "ARVALIS: aucune offre ni configuration Algolia publique détectée; "
+                "la collecte est arrêtée pour éviter un archivage erroné."
+            )
+
+        app_id, api_key, index_name = credentials
+        hits = self._fetch_all_algolia_hits(client, app_id, api_key, index_name)
+
+        urls = []
         seen: set[str] = set()
 
         for hit in hits:
@@ -137,6 +150,94 @@ class ArvalisConnector(BaseConnector):
             urls.append(url)
 
         return urls
+
+    def _discover_algolia_credentials(
+        self, client: Client, listing_html: str, listing_url: str
+    ) -> tuple[str, str, str] | None:
+        credentials = self._extract_algolia_credentials(listing_html)
+        if credentials:
+            return credentials
+
+        # ARVALIS currently loads its search configuration from a JavaScript
+        # bundle rather than embedding it in the listing HTML. Inspect only
+        # ARVALIS-owned scripts to avoid downloading unrelated third-party code.
+        listing_host = urlsplit(listing_url).netloc
+        tree = html_tree(listing_html)
+        for node in tree.css("script[src]"):
+            script_url = urljoin(listing_url, node.attributes.get("src", ""))
+            parsed = urlsplit(script_url)
+            is_arvalis_asset = parsed.netloc == listing_host or parsed.netloc.endswith(".arvalis.fr")
+            if not is_arvalis_asset or not parsed.path.lower().endswith((".js", ".mjs")):
+                continue
+            try:
+                response = client.get(script_url)
+                response.raise_for_status()
+            except Exception:
+                continue
+            credentials = self._extract_algolia_credentials(response.text)
+            if credentials:
+                return credentials
+        return None
+
+    def _extract_offer_links(self, html: str, base_url: str) -> list[str]:
+        tree = html_tree(html)
+        urls: list[str] = []
+        seen: set[str] = set()
+        for node in tree.css("a[href]"):
+            candidate = self._canonicalize_offer_url(urljoin(base_url, node.attributes.get("href", "")))
+            if candidate and candidate not in seen:
+                seen.add(candidate)
+                urls.append(candidate)
+        return urls
+
+    def _extract_algolia_credentials(self, html: str) -> tuple[str, str, str] | None:
+        """Read the public search-only credentials exposed by the ARVALIS page.
+
+        Search-only Algolia keys are frontend configuration and can be rotated.
+        Reading the current values avoids coupling the connector to a stale key.
+        """
+        algolia_client = re.search(
+            r'algoliasearch\s*\(\s*["\']([^"\']+)["\']\s*,\s*["\']([^"\']+)["\']',
+            html,
+            re.IGNORECASE,
+        )
+        algolia_index = re.search(
+            r'(?:initIndex|indexName)\s*\(?\s*["\']([^"\']+)["\']',
+            html,
+            re.IGNORECASE,
+        )
+        if algolia_client:
+            return (
+                algolia_client.group(1).strip(),
+                algolia_client.group(2).strip(),
+                algolia_index.group(1).strip() if algolia_index else self.ALGOLIA_INDEX_NAME,
+            )
+
+        patterns = {
+            "app_id": (
+                r'["\'](?:applicationId|application_id|appId|ALGOLIA_APP_ID)["\']\s*[:=]\s*["\']([^"\']+)',
+                r'x-algolia-application-id["\']?\s*[:=]\s*["\']([^"\']+)',
+            ),
+            "api_key": (
+                r'["\'](?:searchApiKey|search_api_key|apiKey|api_key|ALGOLIA_API_KEY)["\']\s*[:=]\s*["\']([^"\']+)',
+                r'x-algolia-api-key["\']?\s*[:=]\s*["\']([^"\']+)',
+            ),
+            "index_name": (
+                r'["\'](?:indexName|ALGOLIA_INDEX_NAME)["\']\s*[:=]\s*["\']([^"\']+)',
+            ),
+        }
+
+        values: dict[str, str] = {}
+        for name, alternatives in patterns.items():
+            for pattern in alternatives:
+                match = re.search(pattern, html, re.IGNORECASE)
+                if match:
+                    values[name] = match.group(1).strip()
+                    break
+
+        if "app_id" not in values or "api_key" not in values:
+            return None
+        return values["app_id"], values["api_key"], values.get("index_name", self.ALGOLIA_INDEX_NAME)
 
     def parse_offer(self, client: Client, url: str) -> dict[str, object] | None:
         hit = self._hits_by_url.get(url, {})
@@ -255,23 +356,31 @@ class ArvalisConnector(BaseConnector):
     # ALGOLIA DISCOVERY
     # -------------------------------------------------------------------------
 
-    def _fetch_all_algolia_hits(self, client: Client) -> list[dict[str, object]]:
-        first_page = self._query_algolia(client, page=0)
+    def _fetch_all_algolia_hits(
+        self, client: Client, app_id: str, api_key: str, index_name: str
+    ) -> list[dict[str, object]]:
+        first_page = self._query_algolia(client, page=0, app_id=app_id, api_key=api_key, index_name=index_name)
         hits: list[dict[str, object]] = list(first_page.get("hits", []))
         nb_pages = int(first_page.get("nbPages", 1) or 1)
 
         for page in range(1, nb_pages):
-            data = self._query_algolia(client, page=page)
+            data = self._query_algolia(client, page=page, app_id=app_id, api_key=api_key, index_name=index_name)
             hits.extend(data.get("hits", []))
 
         return hits
 
-    def _query_algolia(self, client: Client, page: int) -> dict[str, object]:
-        url = f"https://{self.ALGOLIA_APP_ID}-dsn.algolia.net/1/indexes/{self.ALGOLIA_INDEX_NAME}/query"
+    def _query_algolia(
+        self, client: Client, page: int, app_id: str, api_key: str, index_name: str
+    ) -> dict[str, object]:
+        url = f"https://{app_id.lower()}-dsn.algolia.net/1/indexes/{index_name}/query"
         headers = {
-            "X-Algolia-Application-Id": self.ALGOLIA_APP_ID,
-            "X-Algolia-API-Key": self.ALGOLIA_API_KEY,
+            "X-Algolia-Application-Id": app_id,
+            "X-Algolia-API-Key": api_key,
             "Content-Type": "application/json",
+            # Search-only keys can be restricted to the website origin. These
+            # headers reproduce the public browser request made by ARVALIS.
+            "Origin": "https://www.arvalis.fr",
+            "Referer": self.LISTING_URL,
         }
         payload = {
             "query": "",

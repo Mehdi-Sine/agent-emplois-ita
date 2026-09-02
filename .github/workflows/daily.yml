@@ -39,17 +39,14 @@ jobs:
         id: schedule
         run: |
           paris_time=$(TZ=Europe/Paris date '+%Y-%m-%dT%H:%M:%S%z')
-          paris_hour=$(TZ=Europe/Paris date '+%H')
           echo "paris_time=$paris_time" >> "$GITHUB_OUTPUT"
+          echo "should_collect=true" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "should_collect=true" >> "$GITHUB_OUTPUT"
             echo "reason=manual_dispatch" >> "$GITHUB_OUTPUT"
-          elif [ "$paris_hour" = "00" ] || [ "$paris_hour" = "01" ]; then
-            echo "should_collect=true" >> "$GITHUB_OUTPUT"
-            echo "reason=paris_window" >> "$GITHUB_OUTPUT"
           else
-            echo "should_collect=false" >> "$GITHUB_OUTPUT"
-            echo "reason=outside_paris_window" >> "$GITHUB_OUTPUT"
+            # The workflow has one daily cron. Do not reject a legitimate run
+            # merely because GitHub started it late.
+            echo "reason=scheduled_cron" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Record workflow launch
@@ -79,14 +76,28 @@ jobs:
           MANUAL_REASON: ${{ github.event.inputs.reason }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "Manual dispatch on daily workflow: bypass Paris guard"
+            echo "Manual dispatch on daily workflow"
             if [ -n "$MANUAL_REASON" ]; then
               echo "Manual test reason: $MANUAL_REASON"
             fi
-            python -m app.main_collect_daily --skip-paris-guard
-          else
-            python -m app.main_collect_daily
           fi
+          # The unique cron is the scheduling authority. GitHub may start a
+          # scheduled job late, so a second wall-clock guard would create a
+          # successful but empty run.
+          python -m app.main_collect_daily --skip-paris-guard
+
+      - name: Record workflow completion
+        if: always()
+        continue-on-error: true
+        run: |
+          python -m app.workflow_event_log \
+            --event-type daily_workflow \
+            --status '${{ job.status }}' \
+            --details-json '{"should_collect":"${{ steps.schedule.outputs.should_collect }}","reason":"${{ steps.schedule.outputs.reason }}","paris_time":"${{ steps.schedule.outputs.paris_time }}","install_conclusion":"${{ steps.install.conclusion }}","collector_conclusion":"${{ steps.collect.conclusion }}"}'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PIPELINE_RUN_ID: ${{ steps.collect.outputs.pipeline_run_id }}
 
       - name: Record workflow completion
         if: always()
