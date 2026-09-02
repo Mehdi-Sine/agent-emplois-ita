@@ -128,7 +128,7 @@ class ArvalisConnector(BaseConnector):
         if urls:
             return urls
 
-        credentials = self._extract_algolia_credentials(listing.text)
+        credentials = self._discover_algolia_credentials(client, listing.text, str(listing.url))
         if credentials is None:
             raise RuntimeError(
                 "ARVALIS: aucune offre ni configuration Algolia publique détectée; "
@@ -151,6 +151,34 @@ class ArvalisConnector(BaseConnector):
 
         return urls
 
+    def _discover_algolia_credentials(
+        self, client: Client, listing_html: str, listing_url: str
+    ) -> tuple[str, str, str] | None:
+        credentials = self._extract_algolia_credentials(listing_html)
+        if credentials:
+            return credentials
+
+        # ARVALIS currently loads its search configuration from a JavaScript
+        # bundle rather than embedding it in the listing HTML. Inspect only
+        # ARVALIS-owned scripts to avoid downloading unrelated third-party code.
+        listing_host = urlsplit(listing_url).netloc
+        tree = html_tree(listing_html)
+        for node in tree.css("script[src]"):
+            script_url = urljoin(listing_url, node.attributes.get("src", ""))
+            parsed = urlsplit(script_url)
+            is_arvalis_asset = parsed.netloc == listing_host or parsed.netloc.endswith(".arvalis.fr")
+            if not is_arvalis_asset or not parsed.path.lower().endswith((".js", ".mjs")):
+                continue
+            try:
+                response = client.get(script_url)
+                response.raise_for_status()
+            except Exception:
+                continue
+            credentials = self._extract_algolia_credentials(response.text)
+            if credentials:
+                return credentials
+        return None
+
     def _extract_offer_links(self, html: str, base_url: str) -> list[str]:
         tree = html_tree(html)
         urls: list[str] = []
@@ -168,13 +196,30 @@ class ArvalisConnector(BaseConnector):
         Search-only Algolia keys are frontend configuration and can be rotated.
         Reading the current values avoids coupling the connector to a stale key.
         """
+        algolia_client = re.search(
+            r'algoliasearch\s*\(\s*["\']([^"\']+)["\']\s*,\s*["\']([^"\']+)["\']',
+            html,
+            re.IGNORECASE,
+        )
+        algolia_index = re.search(
+            r'(?:initIndex|indexName)\s*\(?\s*["\']([^"\']+)["\']',
+            html,
+            re.IGNORECASE,
+        )
+        if algolia_client:
+            return (
+                algolia_client.group(1).strip(),
+                algolia_client.group(2).strip(),
+                algolia_index.group(1).strip() if algolia_index else self.ALGOLIA_INDEX_NAME,
+            )
+
         patterns = {
             "app_id": (
-                r'["\'](?:applicationId|appId|ALGOLIA_APP_ID)["\']\s*[:=]\s*["\']([^"\']+)',
+                r'["\'](?:applicationId|application_id|appId|ALGOLIA_APP_ID)["\']\s*[:=]\s*["\']([^"\']+)',
                 r'x-algolia-application-id["\']?\s*[:=]\s*["\']([^"\']+)',
             ),
             "api_key": (
-                r'["\'](?:searchApiKey|apiKey|ALGOLIA_API_KEY)["\']\s*[:=]\s*["\']([^"\']+)',
+                r'["\'](?:searchApiKey|search_api_key|apiKey|api_key|ALGOLIA_API_KEY)["\']\s*[:=]\s*["\']([^"\']+)',
                 r'x-algolia-api-key["\']?\s*[:=]\s*["\']([^"\']+)',
             ),
             "index_name": (
@@ -332,6 +377,10 @@ class ArvalisConnector(BaseConnector):
             "X-Algolia-Application-Id": app_id,
             "X-Algolia-API-Key": api_key,
             "Content-Type": "application/json",
+            # Search-only keys can be restricted to the website origin. These
+            # headers reproduce the public browser request made by ARVALIS.
+            "Origin": "https://www.arvalis.fr",
+            "Referer": self.LISTING_URL,
         }
         payload = {
             "query": "",
