@@ -26,8 +26,16 @@ class ActaConnector(BaseConnector):
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
     }
+    JOB_PATH_RE = re.compile(
+        r"^/(?P<locale>fr|en)/companies(?:-v1)?/acta/jobs/(?P<slug>[^/?#]+)/?$",
+        re.IGNORECASE,
+    )
     JOB_URL_RE = re.compile(
-        r"^https://www\.welcometothejungle\.com/fr/companies/acta/jobs/[^/?#]+/?$",
+        r"^https://www\.welcometothejungle\.com/(?:fr|en)/companies(?:-v1)?/acta/jobs/[^/?#]+/?$",
+        re.IGNORECASE,
+    )
+    RAW_JOB_PATH_RE = re.compile(
+        r"(?P<path>/(?:fr|en)/companies(?:-v1)?/acta/jobs/[^\"'<>\\?#]+)",
         re.IGNORECASE,
     )
     ISO_DATE_RE = re.compile(r'"date(?:Posted|Published)"\s*:\s*"(?P<value>[^"]+)"')
@@ -66,7 +74,7 @@ class ActaConnector(BaseConnector):
         seen: set[str] = set()
 
         for card in tree.css("[data-role='jobs:thumb']"):
-            link = card.css_first("a[href*='/fr/companies/acta/jobs/']")
+            link = self._first_offer_link(card)
             if not link:
                 continue
 
@@ -91,7 +99,7 @@ class ActaConnector(BaseConnector):
             return urls
 
         # fallback minimal si WTTJ ne rend pas les cartes avec le même markup
-        for node in tree.css("a[href*='/fr/companies/acta/jobs/']"):
+        for node in tree.css("a[href]"):
             href = node.attributes.get("href")
             text = normalize_spaces(node.text(separator=" ", strip=True))
             url = self._canonicalize_offer_url(absolute_url(str(response.url), href))
@@ -105,6 +113,37 @@ class ActaConnector(BaseConnector):
             seen.add(url)
             self._listing_by_url[url] = {
                 "title": text or None,
+                "contract_type": None,
+                "location_text": self._fallback_location_from_url(url),
+                "city": self._fallback_location_from_url(url),
+                "remote_mode": None,
+            }
+            urls.append(url)
+
+        for match in self.RAW_JOB_PATH_RE.finditer(response.text):
+            url = self._canonicalize_offer_url(absolute_url(str(response.url), match.group("path")))
+            if not url:
+                continue
+            if "spontan" in url.lower():
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            self._listing_by_url[url] = {
+                "title": None,
+                "contract_type": None,
+                "location_text": self._fallback_location_from_url(url),
+                "city": self._fallback_location_from_url(url),
+                "remote_mode": None,
+            }
+            urls.append(url)
+
+        for url in self._configured_seed_offer_urls():
+            if url in seen:
+                continue
+            seen.add(url)
+            self._listing_by_url[url] = {
+                "title": None,
                 "contract_type": None,
                 "location_text": self._fallback_location_from_url(url),
                 "city": self._fallback_location_from_url(url),
@@ -215,7 +254,28 @@ class ActaConnector(BaseConnector):
             return None
         parsed = urlsplit(url)
         clean = urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
-        return clean if self.JOB_URL_RE.match(clean) else None
+        if not self.JOB_URL_RE.match(clean):
+            return None
+        path_match = self.JOB_PATH_RE.match(parsed.path.rstrip("/"))
+        if not path_match:
+            return None
+        canonical_path = f"/fr/companies/acta/jobs/{path_match.group('slug')}"
+        return urlunsplit(("https", "www.welcometothejungle.com", canonical_path, "", ""))
+
+    def _first_offer_link(self, node):
+        for link in node.css("a[href]"):
+            href = link.attributes.get("href")
+            if self._canonicalize_offer_url(href) or self._canonicalize_offer_url(absolute_url(str(self.source.jobs_url), href)):
+                return link
+        return None
+
+    def _configured_seed_offer_urls(self) -> list[str]:
+        urls: list[str] = []
+        for raw_url in self.source.seed_offer_urls:
+            url = self._canonicalize_offer_url(raw_url)
+            if url and "spontan" not in url.lower() and url not in urls:
+                urls.append(url)
+        return urls
 
     def _extract_card_meta(self, card, title: str, url: str) -> dict[str, object]:
         text = card.text(separator="\n", strip=True)
