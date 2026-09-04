@@ -151,7 +151,11 @@ class ActaConnector(BaseConnector):
                 "location_text": self._fallback_location_from_url(url),
                 "city": self._fallback_location_from_url(url),
                 "remote_mode": None,
-                "listed_as_open": False,
+                # A seed URL is an explicit declaration that the offer must be
+                # collected despite WTTJ's client-side listing. Treat it as an
+                # open signal; remove the seed from sources.yaml when the offer
+                # is genuinely closed.
+                "listed_as_open": True,
             }
             urls.append(url)
 
@@ -166,7 +170,7 @@ class ActaConnector(BaseConnector):
         response.raise_for_status()
         tree = html_tree(response.text)
 
-        title = self._node_text(tree, ["h1", "h2"]) or self._as_clean_str(listing.get("title"))
+        title = self._extract_offer_title(tree, self._as_clean_str(listing.get("title")))
         if not title:
             return None
 
@@ -192,10 +196,10 @@ class ActaConnector(BaseConnector):
         application_url = self._extract_application_url(tree, str(response.url)) or url
         deadline = self._extract_deadline(lines)
 
-        # Presence on WTTJ's current company jobs listing is the authoritative
-        # open signal. For seed-only discovery, only the page title is trusted:
-        # the body contains generic translated "offer unavailable" copy in
-        # hydration/template data even while the displayed offer is active.
+        # Presence on WTTJ's current company jobs listing, or explicit seeding,
+        # is the authoritative open signal. The body and even hidden headings
+        # can contain generic translated "offer unavailable" copy in hydration
+        # or template data while the displayed offer is active.
         is_filled = self._is_filled(title, listed_as_open=listing.get("listed_as_open") is True)
         listing_status = "filled" if is_filled else "open"
         offer_type = self._infer_offer_type(title, contract_type, description_text)
@@ -545,6 +549,23 @@ class ActaConnector(BaseConnector):
                 if text:
                     return text
         return None
+
+    def _extract_offer_title(self, tree, listing_title: str | None = None) -> str | None:
+        if listing_title:
+            return listing_title
+        for node in tree.css("h1, h2"):
+            title = normalize_spaces(node.text(separator=" ", strip=True))
+            if not title:
+                continue
+            lowered = title.lower()
+            if (
+                "offre pourvue" in lowered
+                or "offre n'est plus disponible" in lowered
+                or "offre n’est plus disponible" in lowered
+            ):
+                continue
+            return title
+        return self._node_text(tree, ["h1", "h2"])
 
     def _as_clean_str(self, value: object) -> str | None:
         if value is None:
