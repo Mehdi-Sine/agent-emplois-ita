@@ -159,6 +159,37 @@ class ActaConnector(BaseConnector):
             }
             urls.append(url)
 
+        for match in self.RAW_JOB_PATH_RE.finditer(response.text):
+            url = self._canonicalize_offer_url(absolute_url(str(response.url), match.group("path")))
+            if not url:
+                continue
+            if "spontan" in url.lower():
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            self._listing_by_url[url] = {
+                "title": None,
+                "contract_type": None,
+                "location_text": self._fallback_location_from_url(url),
+                "city": self._fallback_location_from_url(url),
+                "remote_mode": None,
+            }
+            urls.append(url)
+
+        for url in self._configured_seed_offer_urls():
+            if url in seen:
+                continue
+            seen.add(url)
+            self._listing_by_url[url] = {
+                "title": None,
+                "contract_type": None,
+                "location_text": self._fallback_location_from_url(url),
+                "city": self._fallback_location_from_url(url),
+                "remote_mode": None,
+            }
+            urls.append(url)
+
         return urls
 
     def parse_offer(self, client: Client, url: str) -> dict[str, object] | None:
