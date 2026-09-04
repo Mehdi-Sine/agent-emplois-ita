@@ -1,4 +1,7 @@
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import RunTriggerButton from "@/components/RunTriggerButton";
+import { ADMIN_AUTH_COOKIE, ADMIN_AUTH_VALUE } from "@/lib/admin-auth";
 import { getMonitoringPageData } from "@/lib/monitoring-data";
 
 export const dynamic = "force-dynamic";
@@ -46,6 +49,12 @@ function SummaryCard({ label, value }: { label: string; value: string | number }
 }
 
 export default async function MonitoringPage() {
+  const cookieStore = await cookies();
+
+  if (cookieStore.get(ADMIN_AUTH_COOKIE)?.value !== ADMIN_AUTH_VALUE) {
+    redirect("/administration");
+  }
+
   const data = await getMonitoringPageData();
 
   return (

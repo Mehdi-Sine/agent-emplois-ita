@@ -13,6 +13,9 @@ export function SiteFooter() {
         </div>
 
         <div className="flex flex-col gap-2 text-sm font-semibold sm:flex-row sm:flex-wrap lg:justify-end">
+          <Link href="/administration" className="rounded-full bg-white/10 px-4 py-2 hover:bg-white hover:text-black">
+            Administration
+          </Link>
           <Link href="/mentions-legales" className="rounded-full bg-white/10 px-4 py-2 hover:bg-white hover:text-black">
             Mentions légales
           </Link>

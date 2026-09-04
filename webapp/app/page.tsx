@@ -52,7 +52,7 @@ export default async function HomePage(props: { searchParams: SearchParams }) {
               Acta Jobs
             </h1>
             <p className="mt-5 max-w-2xl text-lg font-medium leading-8 text-slate-700">
-              Offres d&apos;emploi et de stage des instituts techniques agricoles.
+              Les offres d&apos;emplois et stages des instituts techniques agricoles
             </p>
             <div className="mt-8 grid gap-3 sm:grid-cols-3">
               <div className="rounded-3xl border border-black/10 bg-[#ffcd00] p-4">
