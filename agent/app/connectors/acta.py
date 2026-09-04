@@ -91,6 +91,7 @@ class ActaConnector(BaseConnector):
                 continue
 
             meta = self._extract_card_meta(card, title, url)
+            meta["listed_as_open"] = True
             self._listing_by_url[url] = meta
             seen.add(url)
             urls.append(url)
@@ -117,6 +118,44 @@ class ActaConnector(BaseConnector):
                 "location_text": self._fallback_location_from_url(url),
                 "city": self._fallback_location_from_url(url),
                 "remote_mode": None,
+                "listed_as_open": True,
+            }
+            urls.append(url)
+
+        for match in self.RAW_JOB_PATH_RE.finditer(response.text):
+            url = self._canonicalize_offer_url(absolute_url(str(response.url), match.group("path")))
+            if not url:
+                continue
+            if "spontan" in url.lower():
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            self._listing_by_url[url] = {
+                "title": None,
+                "contract_type": None,
+                "location_text": self._fallback_location_from_url(url),
+                "city": self._fallback_location_from_url(url),
+                "remote_mode": None,
+                "listed_as_open": True,
+            }
+            urls.append(url)
+
+        for url in self._configured_seed_offer_urls():
+            if url in seen:
+                continue
+            seen.add(url)
+            self._listing_by_url[url] = {
+                "title": None,
+                "contract_type": None,
+                "location_text": self._fallback_location_from_url(url),
+                "city": self._fallback_location_from_url(url),
+                "remote_mode": None,
+                # A seed URL is an explicit declaration that the offer must be
+                # collected despite WTTJ's client-side listing. Treat it as an
+                # open signal; remove the seed from sources.yaml when the offer
+                # is genuinely closed.
+                "listed_as_open": True,
             }
             urls.append(url)
 
@@ -162,7 +201,7 @@ class ActaConnector(BaseConnector):
         response.raise_for_status()
         tree = html_tree(response.text)
 
-        title = self._node_text(tree, ["h1", "h2"]) or self._as_clean_str(listing.get("title"))
+        title = self._extract_offer_title(tree, self._as_clean_str(listing.get("title")))
         if not title:
             return None
 
@@ -188,7 +227,11 @@ class ActaConnector(BaseConnector):
         application_url = self._extract_application_url(tree, str(response.url)) or url
         deadline = self._extract_deadline(lines)
 
-        is_filled = self._is_filled(lines)
+        # Presence on WTTJ's current company jobs listing, or explicit seeding,
+        # is the authoritative open signal. The body and even hidden headings
+        # can contain generic translated "offer unavailable" copy in hydration
+        # or template data while the displayed offer is active.
+        is_filled = self._is_filled(title, listed_as_open=listing.get("listed_as_open") is True)
         listing_status = "filled" if is_filled else "open"
         offer_type = self._infer_offer_type(title, contract_type, description_text)
 
@@ -519,8 +562,10 @@ class ActaConnector(BaseConnector):
         except ValueError:
             return None
 
-    def _is_filled(self, lines: list[str]) -> bool:
-        blob = "\n".join(lines).lower()
+    def _is_filled(self, title: str, listed_as_open: bool = False) -> bool:
+        if listed_as_open:
+            return False
+        blob = title.lower()
         return (
             "offre pourvue" in blob
             or "cette offre n'est plus disponible" in blob
@@ -535,6 +580,23 @@ class ActaConnector(BaseConnector):
                 if text:
                     return text
         return None
+
+    def _extract_offer_title(self, tree, listing_title: str | None = None) -> str | None:
+        if listing_title:
+            return listing_title
+        for node in tree.css("h1, h2"):
+            title = normalize_spaces(node.text(separator=" ", strip=True))
+            if not title:
+                continue
+            lowered = title.lower()
+            if (
+                "offre pourvue" in lowered
+                or "offre n'est plus disponible" in lowered
+                or "offre n’est plus disponible" in lowered
+            ):
+                continue
+            return title
+        return self._node_text(tree, ["h1", "h2"])
 
     def _as_clean_str(self, value: object) -> str | None:
         if value is None:

@@ -99,19 +99,6 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           PIPELINE_RUN_ID: ${{ steps.collect.outputs.pipeline_run_id }}
 
-      - name: Record workflow completion
-        if: always()
-        continue-on-error: true
-        run: |
-          python -m app.workflow_event_log \
-            --event-type daily_workflow \
-            --status '${{ job.status }}' \
-            --details-json '{"should_collect":"${{ steps.schedule.outputs.should_collect }}","reason":"${{ steps.schedule.outputs.reason }}","paris_time":"${{ steps.schedule.outputs.paris_time }}","install_conclusion":"${{ steps.install.conclusion }}","collector_conclusion":"${{ steps.collect.conclusion }}"}'
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          PIPELINE_RUN_ID: ${{ steps.collect.outputs.pipeline_run_id }}
-
       - name: Upload run artifacts
         uses: actions/upload-artifact@v4
         if: always()
