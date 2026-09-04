@@ -1,5 +1,6 @@
 type DispatchOptions = {
   source?: string | null;
+  sources?: string | null;
 };
 
 function getRequiredEnv(name: string): string {
@@ -14,14 +15,15 @@ export async function dispatchCollectWorkflow(options: DispatchOptions = {}) {
   const token = getRequiredEnv("GITHUB_TOKEN");
   const owner = getRequiredEnv("GITHUB_OWNER");
   const repo = getRequiredEnv("GITHUB_REPO");
-  const workflow = process.env.GITHUB_WORKFLOW_FILE || "manual-collect.yml";
+  const workflow = process.env.GITHUB_WORKFLOW_FILE || "manual.yml";
   const ref = process.env.GITHUB_REF || "main";
 
   const payload: Record<string, unknown> = { ref };
+  const sources = options.sources ?? options.source;
 
-  if (options.source) {
+  if (sources) {
     payload.inputs = {
-      source: options.source,
+      sources,
     };
   }
 
@@ -49,6 +51,6 @@ export async function dispatchCollectWorkflow(options: DispatchOptions = {}) {
     ok: true,
     workflow,
     ref,
-    source: options.source ?? null,
+    sources: sources ?? null,
   };
 }

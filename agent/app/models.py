@@ -18,6 +18,7 @@ class SourceConfig(BaseModel):
     enabled: bool = True
     mode: str = "http"
     timeout_seconds: int = 20
+    seed_offer_urls: list[str] = Field(default_factory=list)
 
 
 class NormalizedOffer(BaseModel):

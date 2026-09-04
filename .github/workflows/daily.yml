@@ -8,11 +8,10 @@ on:
         required: false
         default: ""
   schedule:
-    # GitHub cron is UTC: 23:00 UTC covers 01:00 Paris during summer time (CEST),
-    # 00:00 UTC covers 01:00 Paris during winter time (CET).
-    # The Python guard below ensures only the 01:00 Europe/Paris scheduled run performs a collection.
+    # GitHub cron is UTC. 23:00 UTC is 00:00 Paris in winter (CET)
+    # and 01:00 Paris in summer (CEST), so a single cron stays within
+    # the requested midnight-to-01:00 Europe/Paris execution window.
     - cron: "0 23 * * *"
-    - cron: "0 0 * * *"
 
 concurrency:
   group: ita-jobs-daily
@@ -36,10 +35,39 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Decide whether to collect
+        id: schedule
+        run: |
+          paris_time=$(TZ=Europe/Paris date '+%Y-%m-%dT%H:%M:%S%z')
+          echo "paris_time=$paris_time" >> "$GITHUB_OUTPUT"
+          echo "should_collect=true" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "reason=manual_dispatch" >> "$GITHUB_OUTPUT"
+          else
+            # The workflow has one daily cron. Do not reject a legitimate run
+            # merely because GitHub started it late.
+            echo "reason=scheduled_cron" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Record workflow launch
+        if: always()
+        continue-on-error: true
+        run: |
+          python -m app.workflow_event_log \
+            --event-type daily_workflow \
+            --status started \
+            --details-json '{"should_collect":"${{ steps.schedule.outputs.should_collect }}","reason":"${{ steps.schedule.outputs.reason }}","paris_time":"${{ steps.schedule.outputs.paris_time }}"}'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
       - name: Install dependencies
+        id: install
         run: pip install -r requirements.txt
 
       - name: Run collector
+        id: collect
+        if: success() && steps.schedule.outputs.should_collect == 'true'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
@@ -48,14 +76,28 @@ jobs:
           MANUAL_REASON: ${{ github.event.inputs.reason }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "Manual dispatch on daily workflow: bypass Paris guard"
+            echo "Manual dispatch on daily workflow"
             if [ -n "$MANUAL_REASON" ]; then
               echo "Manual test reason: $MANUAL_REASON"
             fi
-            python -m app.main_collect_daily --skip-paris-guard
-          else
-            python -m app.main_collect_daily
           fi
+          # The unique cron is the scheduling authority. GitHub may start a
+          # scheduled job late, so a second wall-clock guard would create a
+          # successful but empty run.
+          python -m app.main_collect_daily --skip-paris-guard
+
+      - name: Record workflow completion
+        if: always()
+        continue-on-error: true
+        run: |
+          python -m app.workflow_event_log \
+            --event-type daily_workflow \
+            --status '${{ job.status }}' \
+            --details-json '{"should_collect":"${{ steps.schedule.outputs.should_collect }}","reason":"${{ steps.schedule.outputs.reason }}","paris_time":"${{ steps.schedule.outputs.paris_time }}","install_conclusion":"${{ steps.install.conclusion }}","collector_conclusion":"${{ steps.collect.conclusion }}"}'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PIPELINE_RUN_ID: ${{ steps.collect.outputs.pipeline_run_id }}
 
       - name: Upload run artifacts
         uses: actions/upload-artifact@v4
@@ -66,7 +108,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Send run summary email
-        if: always()
+        if: always() && steps.schedule.outputs.should_collect == 'true' && steps.collect.outputs.did_run == 'true'
         continue-on-error: true
         working-directory: agent
         run: python -m app.run_summary_email
@@ -84,3 +126,4 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           SMTP_USE_TLS: ${{ vars.SMTP_USE_TLS }}
           SMTP_USE_SSL: ${{ vars.SMTP_USE_SSL }}
+          PIPELINE_RUN_ID: ${{ steps.collect.outputs.pipeline_run_id }}
