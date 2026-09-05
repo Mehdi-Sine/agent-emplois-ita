@@ -50,3 +50,25 @@ export type PipelineRun = {
   archived_offers: number;
   summary_json: Record<string, unknown>;
 };
+
+export type TypologyProfile = {
+  id: string;
+  label: string;
+  description: string;
+  count: number;
+  activeCount: number;
+  archivedCount: number;
+  skills: string[];
+  missions: string[];
+  activities: string[];
+  training: string[];
+  sources: Array<{ label: string; count: number }>;
+  contractTypes: Array<{ label: string; count: number }>;
+  offerTypes: Array<{ label: string; count: number }>;
+  examples: Array<{
+    id: string;
+    title: string;
+    sourceName: string;
+    archived: boolean;
+  }>;
+};
